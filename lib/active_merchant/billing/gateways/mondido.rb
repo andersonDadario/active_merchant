@@ -387,6 +387,8 @@ puts raw_response.inspect
 
           raw_response = e.response.body
 puts "rescue1"
+puts e.inspect
+puts e.response.inspect
 puts raw_response.inspect
           response = response_error(raw_response)
         rescue JSON::ParserError
