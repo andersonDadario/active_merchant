@@ -199,11 +199,11 @@ module ActiveMerchant #:nodoc:
           # The currency (SEK, CAD, CNY, COP, CZK, DKK, HKD, HUF, ISK, INR, ILS, JPY, KES, KRW,
           #  KWD, LVL, MYR, MXN, MAD, OMR, NZD, NOK, PAB, QAR, RUB, SAR, SGD, ZAR, CHF, THB, TTD,
           #  AED, GBP, USD, TWD, VEF, RON, TRY, EUR, UAH, PLN, BRL)
-          :currency => get_currency(money, options),
+#          :currency => get_currency(money, options),
 
           # string
           # The merchant specific user/customer ID
-          :customer_ref => (options[:custom_ref] || '').to_s,
+#          :customer_ref => (options[:custom_ref] || '').to_s,
 
           # string * required
           # The hash is a MD5 encoded string with some of your merchant and order specific parameters,
@@ -304,8 +304,6 @@ module ActiveMerchant #:nodoc:
         # (5)  currency (string): An ISO 4214 currency code, must be in lower case (ex. eur)
         # (6)  test (string): "test" if transaction is in test mode, otherwise empty string ""
         # (7)  secret (string): Unique merchant specific string
-
-        currency = get_currency(money, options)
 
         hash_attributes = @merchant_id.to_s                                 # 1
         hash_attributes += options[:order_id].to_s                          # 2
