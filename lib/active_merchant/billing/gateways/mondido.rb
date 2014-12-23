@@ -180,10 +180,6 @@ module ActiveMerchant #:nodoc:
         #                  It can be information about the customer, the product or about campaigns or offers.
 
         post = {
-          # string* required
-          # The ID of the merchant
-          :merchant_id => @merchant_id.to_s,
-
           # decimal* required
           # The transaction amount ex. 12.00
           :amount => get_amount(money, options),
@@ -213,7 +209,7 @@ module ActiveMerchant #:nodoc:
 
           # string * required
           # A URL to the page where the user is redirected after a unsuccessful transaction.
-          :error_url => ""
+#          :error_url => ""
         }
 
         # Metadata (string)
