@@ -215,8 +215,7 @@ module ActiveMerchant #:nodoc:
           :error_url => ""
         }
 
-        # metadata
-        # string
+        # Metadata (string)
         # Merchant custom Metadata:
         #   Metadata is custom schemaless information that you can choose to send in to Mondido.
         #   It can be information about the customer, the product or about campaigns or offers.
@@ -225,7 +224,7 @@ module ActiveMerchant #:nodoc:
         #   receipts to your customers in a webhook.
         post.merge!( :metadata => options[:metadata] ) if options[:metadata]
         
-        add_credit_card(post, payment)
+        #add_credit_card(post, payment)
         #add_address(post, payment, options)
         #add_customer_data(post, options)
 
