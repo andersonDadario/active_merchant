@@ -1,5 +1,6 @@
 require 'digest'
 require 'base64'
+require 'json'
 
 module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
@@ -379,7 +380,7 @@ module ActiveMerchant #:nodoc:
 puts "begin1"
 puts method
 puts self.live_url + uri
-puts  { "attributes" => parameters }.to_json
+puts ({ "attributes" => parameters }.to_json)
 puts headers(options)
 puts raw_response.inspect
         rescue ResponseError => e
