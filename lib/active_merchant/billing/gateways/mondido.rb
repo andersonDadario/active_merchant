@@ -370,7 +370,7 @@ module ActiveMerchant #:nodoc:
           raw_response = ssl_request(
             method,
             self.live_url + uri,
-            { "attributes" => parameters }.to_json ),
+            { "attributes" => parameters }.to_json,
             headers(options)
           )
           response = parse(raw_response)
