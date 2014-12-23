@@ -171,18 +171,11 @@ module ActiveMerchant #:nodoc:
         super
       end
 
-      def purchase2(money, payment, options={})
-        'ok'
-      end
-
-      def purchase3(money)
-        'omg'
-      end
-
-      def purchase1(money, payment, options={})
+      def purchase(money, payment, options={})
+        'xamps'
         # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
         # API reference: http://doc.mondido.com/api#transaction-create
-
+=begin
         post = {
           # string* required
           # The ID of the merchant
@@ -219,7 +212,7 @@ module ActiveMerchant #:nodoc:
           # A URL to the page where the user is redirected after a unsuccessful transaction.
           :error_url => ""
         }
-
+=end
         # metadata
         # string
         # Merchant custom Metadata:
@@ -228,13 +221,13 @@ module ActiveMerchant #:nodoc:
         #
         #   The metadata can be used to customize your hosted payment window or sending personalized
         #   receipts to your customers in a webhook.
-        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
+#        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
         
-        add_credit_card(post, payment)
+#        add_credit_card(post, payment)
         #add_address(post, payment, options)
         #add_customer_data(post, options)
 
-        commit(:post, 'transactions', post)
+#        commit(:post, 'transactions', post)
       end
 
       def authorize(money, payment, options={})
