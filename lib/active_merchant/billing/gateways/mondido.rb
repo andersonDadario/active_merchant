@@ -420,7 +420,7 @@ puts "rescue json"
 
       def headers(options = {})
         {
-          "Authorization" => "Basic " + Base64.encode64("#{@merchant_id}:#{@api_token}"),
+          "Authorization" => "Basic " + Base64.encode64("#{@merchant_id}:#{@api_token}").strip,
           "User-Agent" => "Mondido ActiveMerchantBindings/#{ActiveMerchant::VERSION}",
           #"X-Mondido-Client-User-Agent" => user_agent, # defined in Gateway.rb
           #"X-Mondido-Client-IP" => options[:ip] if options[:ip]
