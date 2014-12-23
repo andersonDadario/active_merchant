@@ -374,11 +374,22 @@ module ActiveMerchant #:nodoc:
             { "attributes" => parameters }.to_json,
             headers(options)
           )
+
           response = parse(raw_response)
+puts "begin1"
+puts method
+puts self.live_url + uri
+puts  { "attributes" => parameters }.to_json
+puts headers(options)
+puts raw_response.inspect
         rescue ResponseError => e
+
           raw_response = e.response.body
           response = response_error(raw_response)
+puts "rescue1"
+puts raw_response.inspect
         rescue JSON::ParserError
+puts "rescue json"
           response = json_error(raw_response)
         end
 
