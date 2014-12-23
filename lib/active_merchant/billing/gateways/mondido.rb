@@ -228,7 +228,7 @@ module ActiveMerchant #:nodoc:
         #add_address(post, payment, options)
         #add_customer_data(post, options)
 
-        commit(:post, 'transactions', post)
+#        commit(:post, 'transactions', post)
       end
 
       def authorize(money, payment, options={})
