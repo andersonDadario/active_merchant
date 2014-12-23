@@ -172,10 +172,9 @@ module ActiveMerchant #:nodoc:
       end
 
       def purchase(money, payment, options={})
-        'xamps'
         # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
         # API reference: http://doc.mondido.com/api#transaction-create
-=begin
+
         post = {
           # string* required
           # The ID of the merchant
@@ -212,7 +211,7 @@ module ActiveMerchant #:nodoc:
           # A URL to the page where the user is redirected after a unsuccessful transaction.
           :error_url => ""
         }
-=end
+
         # metadata
         # string
         # Merchant custom Metadata:
