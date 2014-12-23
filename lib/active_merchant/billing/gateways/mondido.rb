@@ -185,30 +185,30 @@ module ActiveMerchant #:nodoc:
 
           # decimal* required
           # The transaction amount ex. 12.00
-#          :amount => get_amount(money, options),
+          :amount => get_amount(money, options),
 
           # string* required
           # Merchant order/payment ID
-#          :payment_ref => options[:order_id].to_s,
+          :payment_ref => options[:order_id].to_s,
 
           # boolean
           # Whether the transaction is a test transaction. Defaults false
-#          :test => test?,
+          :test => test?,
 
           # string* required
           # The currency (SEK, CAD, CNY, COP, CZK, DKK, HKD, HUF, ISK, INR, ILS, JPY, KES, KRW,
           #  KWD, LVL, MYR, MXN, MAD, OMR, NZD, NOK, PAB, QAR, RUB, SAR, SGD, ZAR, CHF, THB, TTD,
           #  AED, GBP, USD, TWD, VEF, RON, TRY, EUR, UAH, PLN, BRL)
-#          :currency => get_currency(money, options),
+          :currency => get_currency(money, options),
 
           # string
           # The merchant specific user/customer ID
-#          :customer_ref => (options[:custom_ref] || '').to_s,
+          :customer_ref => (options[:custom_ref] || '').to_s,
 
           # string * required
           # The hash is a MD5 encoded string with some of your merchant and order specific parameters,
           # which is used to verify the payment, and make sure that it is not altered in any way.
-#          :hash => transaction_hash_for(money, payment, options),
+          :hash => transaction_hash_for(money, payment, options),
 
           # string * required
           # A URL to the page where the user is redirected after a unsuccessful transaction.
@@ -222,13 +222,13 @@ module ActiveMerchant #:nodoc:
         #
         #   The metadata can be used to customize your hosted payment window or sending personalized
         #   receipts to your customers in a webhook.
-#        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
+        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
         
-#        add_credit_card(post, payment)
+        add_credit_card(post, payment)
         #add_address(post, payment, options)
         #add_customer_data(post, options)
 
-#        commit(:post, 'transactions', post)
+        commit(:post, 'transactions', post)
       end
 
       def authorize(money, payment, options={})
@@ -336,12 +336,12 @@ module ActiveMerchant #:nodoc:
         post[:card_type] = ActiveMerchant::Billing::CreditCard.brand?(credit_card.number)
       end
 
-      def get_amount(money, currency)
-        currency = get_currency
+      def get_amount(money, options)
+        currency = get_currency(money, options)
         localized_amount(money, currency)
       end
 
-      def get_currency(money,options)
+      def get_currency(money, options)
         (options[:currency] || currency(money)).downcase
       end  
 
