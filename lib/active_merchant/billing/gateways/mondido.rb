@@ -171,7 +171,15 @@ module ActiveMerchant #:nodoc:
         super
       end
 
-      def purchase(money, payment, options={})
+      def purchase2(money, payment, options={})
+        'ok'
+      end
+
+      def purchase3(money)
+        'omg'
+      end
+
+      def purchase1(money, payment, options={})
         # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
         # API reference: http://doc.mondido.com/api#transaction-create
 
