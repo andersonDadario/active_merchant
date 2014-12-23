@@ -192,15 +192,6 @@ module ActiveMerchant #:nodoc:
           # Whether the transaction is a test transaction. Defaults false
           :test => test?,
 
-          # string
-          # Merchant custom Metadata:
-          #   Metadata is custom schemaless information that you can choose to send in to Mondido.
-          #   It can be information about the customer, the product or about campaigns or offers.
-          #
-          #   The metadata can be used to customize your hosted payment window or sending personalized
-          #   receipts to your customers in a webhook.
-          :metadata => options[:metadata] if options[:metadata],
-
           # string* required
           # The currency (SEK, CAD, CNY, COP, CZK, DKK, HKD, HUF, ISK, INR, ILS, JPY, KES, KRW,
           #  KWD, LVL, MYR, MXN, MAD, OMR, NZD, NOK, PAB, QAR, RUB, SAR, SGD, ZAR, CHF, THB, TTD,
@@ -220,6 +211,16 @@ module ActiveMerchant #:nodoc:
           # A URL to the page where the user is redirected after a unsuccessful transaction.
           :error_url => ""
         }
+
+        # metadata
+        # string
+        # Merchant custom Metadata:
+        #   Metadata is custom schemaless information that you can choose to send in to Mondido.
+        #   It can be information about the customer, the product or about campaigns or offers.
+        #
+        #   The metadata can be used to customize your hosted payment window or sending personalized
+        #   receipts to your customers in a webhook.
+        options.merge!( :metadata => options[:metadata] ) if options[:metadata]
         
         add_credit_card(post, payment)
         #add_address(post, payment, options)
