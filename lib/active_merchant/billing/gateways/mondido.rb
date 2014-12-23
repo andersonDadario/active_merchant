@@ -365,30 +365,18 @@ module ActiveMerchant #:nodoc:
       def api_request(method, uri, parameters = nil, options = {})
         raw_response = response = nil
         begin
-puts "begin1"
-puts method
-puts self.live_url + uri
-puts post_data(parameters)
-puts headers(options)
           raw_response = ssl_request(
             method,
             self.live_url + uri,
             post_data(parameters),
             headers(options)
           )
-puts raw_response.inspect
 
           response = parse(raw_response)
         rescue ResponseError => e
-
           raw_response = e.response.body
-puts "rescue1"
-puts e.inspect
-puts e.response.inspect
-puts raw_response.inspect
           response = response_error(raw_response)
         rescue JSON::ParserError
-puts "rescue json"
           response = json_error(raw_response)
         end
 
