@@ -310,7 +310,7 @@ module ActiveMerchant #:nodoc:
         hash_attributes += ""                                               # 3
         hash_attributes += get_amount(money, options)                       # 4 #.round(2).to_s
         hash_attributes += get_currency(money, options)                     # 5
-        hash_attributes += (test? "test" : "")                              # 6
+        hash_attributes += ((test?) ? "test" : "")                          # 6
         hash_attributes += @hash_secret                                     # 7
 
         md5 = Digest::MD5.new
