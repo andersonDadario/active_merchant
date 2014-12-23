@@ -208,7 +208,7 @@ module ActiveMerchant #:nodoc:
           # string * required
           # The hash is a MD5 encoded string with some of your merchant and order specific parameters,
           # which is used to verify the payment, and make sure that it is not altered in any way.
-          :hash => transaction_hash_for(money, payment, options),
+#          :hash => transaction_hash_for(money, payment, options),
 
           # string * required
           # A URL to the page where the user is redirected after a unsuccessful transaction.
