@@ -347,13 +347,14 @@ module ActiveMerchant #:nodoc:
 
       def commit(method, uri, parameters = nil, options = {})
         response = api_request(method, uri, parameters, options)
+        success = (response["status"] == "approved")
 
         # Not implemented yet
         avs_code = AVS_CODE_TRANSLATOR["25"]
         cvc_code = CVC_CODE_TRANSLATOR["3"]
 
         Response.new(
-          (response["status"] == "approved"),
+          success,
           (success ? "Transaction approved" : response["error"]["description"]),
           response,
           test: response["test"],
