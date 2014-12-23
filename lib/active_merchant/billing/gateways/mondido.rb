@@ -140,6 +140,14 @@ module ActiveMerchant #:nodoc:
         @merchant_id, @api_token = options[:login].split(":")
         @hash_secret = options[:password]
 
+        super
+      end
+
+      def purchase(money, payment, options={})
+        # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
+        # API reference: http://doc.mondido.com/api#transaction-create
+
+        requires!(options, :order_id)
         # A complete (original) options hash might be:
         # options = {
         #   :order_id => '1',
@@ -162,19 +170,13 @@ module ActiveMerchant #:nodoc:
         #     :phone => ''
         #   }
         # }
+        ## There are 3 different addresses you can use.
+        ## There are :billing_address, :shipping_address, or you can just pass in
+        ## :address and it will be used for both.
 
-
-        # New options introduced by Mondido Gateway
+        ## New options introduced by Mondido Gateway
         #  :metadata    => (string) Metadata is custom schemaless information that you can choose to send in to Mondido.
         #                  It can be information about the customer, the product or about campaigns or offers.
-
-        super
-      end
-
-      def purchase(money, payment, options={})
-        requires!(options, :order_id, :payment_ref)
-        # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
-        # API reference: http://doc.mondido.com/api#transaction-create
 
         post = {
           # string* required
@@ -221,13 +223,13 @@ module ActiveMerchant #:nodoc:
         #
         #   The metadata can be used to customize your hosted payment window or sending personalized
         #   receipts to your customers in a webhook.
-#        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
+        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
         
-#        add_credit_card(post, payment)
+        add_credit_card(post, payment)
         #add_address(post, payment, options)
         #add_customer_data(post, options)
 
-#        commit(:post, 'transactions', post)
+        commit(:post, 'transactions', post)
       end
 
       def authorize(money, payment, options={})
