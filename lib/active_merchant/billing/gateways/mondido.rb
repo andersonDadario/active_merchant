@@ -372,12 +372,12 @@ module ActiveMerchant #:nodoc:
 puts "begin1"
 puts method
 puts self.live_url + uri
-puts parameters
+puts post_data(parameters)
 puts headers(options)
           raw_response = ssl_request(
             method,
             self.live_url + uri,
-            parameters.to_json,
+            post_data(parameters),
             headers(options)
           )
 puts raw_response.inspect
@@ -397,6 +397,25 @@ puts "rescue json"
         end
 
         response
+      end
+
+      def post_data(params)
+        return nil unless params
+
+        params.map do |key, value|
+          next if value.blank?
+          if value.is_a?(Hash)
+            h = {}
+            value.each do |k, v|
+              h["#{key}[#{k}]"] = v unless v.blank?
+            end
+            post_data(h)
+          elsif value.is_a?(Array)
+            value.map { |v| "#{key}[]=#{CGI.escape(v.to_s)}" }.join("&")
+          else
+            "#{key}=#{CGI.escape(value.to_s)}"
+          end
+        end.compact.join("&")
       end
 
       def headers(options = {})
