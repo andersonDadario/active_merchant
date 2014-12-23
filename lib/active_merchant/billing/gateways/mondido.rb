@@ -372,12 +372,12 @@ module ActiveMerchant #:nodoc:
 puts "begin1"
 puts method
 puts self.live_url + uri
-puts ({ "attributes" => parameters }.to_json)
+puts parameters
 puts headers(options)
           raw_response = ssl_request(
             method,
             self.live_url + uri,
-            { "attributes" => parameters }.to_json,
+            parameters.to_json,
             headers(options)
           )
 puts raw_response.inspect
