@@ -172,6 +172,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def purchase(money, payment, options={})
+        requires!(options, :order_id, :payment_ref)
         # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
         # API reference: http://doc.mondido.com/api#transaction-create
 
@@ -200,7 +201,7 @@ module ActiveMerchant #:nodoc:
 
           # string
           # The merchant specific user/customer ID
-          :customer_ref => options[:custom_ref].to_s,
+          :customer_ref => (options[:custom_ref] || '').to_s,
 
           # string * required
           # The hash is a MD5 encoded string with some of your merchant and order specific parameters,
