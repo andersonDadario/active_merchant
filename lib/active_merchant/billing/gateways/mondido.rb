@@ -185,15 +185,15 @@ module ActiveMerchant #:nodoc:
 
           # decimal* required
           # The transaction amount ex. 12.00
-          :amount => get_amount(money, options),
+#          :amount => get_amount(money, options),
 
           # string* required
           # Merchant order/payment ID
-          :payment_ref => options[:order_id].to_s,
+#          :payment_ref => options[:order_id].to_s,
 
           # boolean
           # Whether the transaction is a test transaction. Defaults false
-          :test => test?,
+#          :test => test?,
 
           # string* required
           # The currency (SEK, CAD, CNY, COP, CZK, DKK, HKD, HUF, ISK, INR, ILS, JPY, KES, KRW,
