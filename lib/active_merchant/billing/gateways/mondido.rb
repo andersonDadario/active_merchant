@@ -356,13 +356,13 @@ module ActiveMerchant #:nodoc:
 
         Response.new(
           success,
-          (success ? "Transaction approved" : response["error"]["description"]),
+          (success ? "Transaction approved" : response["description"]),
           response,
           test: response["test"],
-          authorization: success ? response["id"] : response["error"]["description"],
+          authorization: success ? response["id"] : response["description"],
           :avs_result => { :code => avs_code },
           :cvv_result => cvc_code,
-          :error_code => success ? nil : STANDARD_ERROR_CODE_TRANSLATOR[response["error"]["name"]]
+          :error_code => success ? nil : STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]
         )
       end
 
@@ -375,20 +375,20 @@ module ActiveMerchant #:nodoc:
             { "attributes" => parameters }.to_json,
             headers(options)
           )
-
-          response = parse(raw_response)
 puts "begin1"
 puts method
 puts self.live_url + uri
 puts ({ "attributes" => parameters }.to_json)
 puts headers(options)
 puts raw_response.inspect
+
+          response = parse(raw_response)
         rescue ResponseError => e
 
           raw_response = e.response.body
-          response = response_error(raw_response)
 puts "rescue1"
 puts raw_response.inspect
+          response = response_error(raw_response)
         rescue JSON::ParserError
 puts "rescue json"
           response = json_error(raw_response)
