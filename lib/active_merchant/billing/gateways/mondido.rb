@@ -200,7 +200,7 @@ module ActiveMerchant #:nodoc:
 
           # string
           # The merchant specific user/customer ID
-          :customer_ref => options[:custom_ref].to_s if options[:custom_ref],
+          :customer_ref => options[:custom_ref].to_s,
 
           # string * required
           # The hash is a MD5 encoded string with some of your merchant and order specific parameters,
