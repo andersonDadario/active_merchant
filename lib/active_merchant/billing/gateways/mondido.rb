@@ -369,17 +369,17 @@ module ActiveMerchant #:nodoc:
       def api_request(method, uri, parameters = nil, options = {})
         raw_response = response = nil
         begin
+puts "begin1"
+puts method
+puts self.live_url + uri
+puts ({ "attributes" => parameters }.to_json)
+puts headers(options)
           raw_response = ssl_request(
             method,
             self.live_url + uri,
             { "attributes" => parameters }.to_json,
             headers(options)
           )
-puts "begin1"
-puts method
-puts self.live_url + uri
-puts ({ "attributes" => parameters }.to_json)
-puts headers(options)
 puts raw_response.inspect
 
           response = parse(raw_response)
