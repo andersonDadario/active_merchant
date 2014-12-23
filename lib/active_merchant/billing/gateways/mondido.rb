@@ -222,9 +222,9 @@ module ActiveMerchant #:nodoc:
         #
         #   The metadata can be used to customize your hosted payment window or sending personalized
         #   receipts to your customers in a webhook.
-        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
+#        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
         
-        #add_credit_card(post, payment)
+#        add_credit_card(post, payment)
         #add_address(post, payment, options)
         #add_customer_data(post, options)
 
