@@ -17,7 +17,7 @@ module ActiveMerchant #:nodoc:
       # :cents    => integer with cents (e.g., 1000 = $10.00)
       self.money_format = :dollars
 
-      # Need to confirm is there is more ...
+      # Need to confirm if there is more ...
       self.supported_countries = %w(SE)
 
 =begin
@@ -205,11 +205,7 @@ module ActiveMerchant #:nodoc:
           # string * required
           # The hash is a MD5 encoded string with some of your merchant and order specific parameters,
           # which is used to verify the payment, and make sure that it is not altered in any way.
-          :hash => transaction_hash_for(money, payment, options),
-
-          # string * required
-          # A URL to the page where the user is redirected after a unsuccessful transaction.
-#          :error_url => ""
+          :hash => transaction_hash_for(money, payment, options)
         }
 
         # Metadata (string)
@@ -318,9 +314,11 @@ module ActiveMerchant #:nodoc:
 
 
       def add_customer_data(post, options)
+        # Not implemented yet
       end
 
       def add_address(post, creditcard, options)
+        # Not implemented yet
       end
 
       def add_credit_card(post, credit_card)
