@@ -4,50 +4,70 @@ class RemoteMondidoTest < Test::Unit::TestCase
   def setup
     @gateway = MondidoGateway.new(fixtures(:mondido))
 
-    @amount = 100
-    @credit_card = credit_card('4000100011112224')
-    @declined_card = credit_card('4000300011112220')
+    @amount = 100 # $ 1.00
+    @credit_card = credit_card('4111111111111111', { verification_value: '200' })
+    @declined_card = credit_card('4111111111111111', { verification_value: '201' })
+    @cvv_invalid_card = credit_card('4111111111111111', { verification_value: '202' })
+    @expired_card = credit_card('4111111111111111', { verification_value: '203' })
 
-    @options = {
-      order_id: '1',
-      billing_address: address,
-      description: 'Store Purchase'
-    }
+    # The @base_order_id is for test purposes
+    # As could not exist more than one transaction using the same payment_ref value,
+    # To prevent different methods from using the same order_id, I just increment the
+    # test_iteration value in 1 and it will serve as a factor to change the order_id in
+    # every test method. This way there will be no duplicates and all tests will respect
+    # some base number (200000000 in this case).
+    test_iteration = 9
+    @remote_mondido_test_methods = (RemoteMondidoTest.instance_methods - Object.methods)
+    number_of_test_methods = @remote_mondido_test_methods.count
+    @base_order_id = (200000000 + (test_iteration * number_of_test_methods)) 
+
+    @options = { order_id: @base_order_id }
   end
 
   def test_dump_transcript
-    #skip("Transcript scrubbing for this gateway has been tested.")
+    skip("Transcript scrubbing for this gateway has been tested.")
 
     # This test will run a purchase transaction on your gateway
     # and dump a transcript of the HTTP conversation so that
     # you can use that transcript as a reference while
     # implementing your scrubbing logic
-    dump_transcript_and_fail(@gateway, @amount, @credit_card, @options)
+    #dump_transcript_and_fail(@gateway, @amount, @credit_card, @options)
   end
 
   def test_transcript_scrubbing
+    @options[:order_id] = (@base_order_id + @remote_mondido_test_methods.index(__method__))
+
     transcript = capture_transcript(@gateway) do
       @gateway.purchase(@amount, @credit_card, @options)
     end
     transcript = @gateway.scrub(transcript)
 
     assert_scrubbed(@credit_card.number, transcript)
-    assert_scrubbed(@credit_card.verification_value, transcript)
-    assert_scrubbed(@gateway.options[:password], transcript)
+    assert_scrubbed("card_cvv=#{@credit_card.verification_value}", transcript)
+    assert_scrubbed(@gateway.options[:api_token], transcript)
+    assert_scrubbed(@gateway.options[:hash_secret], transcript)
+
+    b64_value = Base64.encode64(
+      fixtures(:mondido)[:merchant_id].to_s + ":" + fixtures(:mondido)[:api_token]
+    ).strip
+    assert_scrubbed("Authorization: Basic #{b64_value}", transcript)
   end
 
   def test_successful_purchase
+    @options[:order_id] = (@base_order_id + @remote_mondido_test_methods.index(__method__))
+
     response = @gateway.purchase(@amount, @credit_card, @options)
     assert_success response
-    assert_equal 'REPLACE WITH SUCCESS MESSAGE', response.message
+    assert_equal 'Transaction approved', response.message
   end
 
   def test_failed_purchase
     response = @gateway.purchase(@amount, @declined_card, @options)
-    assert_failure response
-    assert_equal 'REPLACE WITH FAILED PURCHASE MESSAGE', response.message
+    assert_equal 'errors.payment.declined', response.params["name"]
+    assert_equal response.params["description"], response.message
   end
 
+=begin
   def test_successful_authorize_and_capture
     auth = @gateway.authorize(@amount, @credit_card, @options)
     assert_success auth
@@ -120,11 +140,13 @@ class RemoteMondidoTest < Test::Unit::TestCase
     assert_match %r{REPLACE WITH FAILED PURCHASE MESSAGE}, response.message
     assert_equal Gateway::STANDARD_ERROR_CODE[:card_declined], response.error_code
   end
+=end
 
   def test_invalid_login
     gateway = MondidoGateway.new(
-      login: '',
-      password: ''
+      merchant_id: '',
+      api_token: '',
+      hash_secret: ''
     )
     response = gateway.purchase(@amount, @credit_card, @options)
     assert_failure response

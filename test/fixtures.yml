@@ -353,8 +353,9 @@ mollie_ideal:
 
 # Working credentials, no need to replace
 mondido:
-  some_credential: SOMECREDENTIAL
-  another_credential: ANOTHERCREDENTIAL
+  merchant_id: 
+  api_token: 
+  hash_secret: 
 
 # Working credentials, no need to replace
 moneris:

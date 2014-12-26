@@ -137,9 +137,11 @@ module ActiveMerchant #:nodoc:
       }
 
       def initialize(options={})
-        requires!(options, :login, :password)
-        @merchant_id, @api_token = options[:login].split(":")
-        @hash_secret = options[:password]
+        requires!(options, :merchant_id, :api_token, :hash_secret)
+
+        @merchant_id = options[:merchant_id]
+        @api_token = options[:api_token]
+        @hash_secret = options[:hash_secret]
 
         super
       end
@@ -281,8 +283,7 @@ module ActiveMerchant #:nodoc:
           gsub(%r((card_number=)\d+), '\1[FILTERED]').
           gsub(%r((card_type=)\w+), '\1[FILTERED]').
           gsub(%r((hash=)\w+), '\1[FILTERED]').
-          gsub(%r((amount=)\w+), '\1[FILTERED]').
-          gsub(%r((merchant_id=)\d+), '\1[FILTERED]')
+          gsub(%r((amount=)\w+), '\1[FILTERED]')
       end
 
       private
