@@ -59,64 +59,23 @@ module ActiveMerchant #:nodoc:
       :maestro – International Maestro
       :forbrugsforeningen – Forbrugsforeningen
       :laser – Laser
-
-      =========================================
-      Questions:
-
-      (1) Is Diner == DinerClub? In doubt I removed from supported_cardtypes
-      (2) What about the card "ukash_neo"?
-          It isn't supported in this gem. Need to suggest a pull request.
-
-      (3) Is Electron == Visa Electron? In doubt I removed from supported_cardtypes
-      (4) Is Visa && Visa Debit represented by :visa?
-      (5) Is MasterCard && Debit MasterCard represented by :master?
 =end
-      self.supported_cardtypes = [:visa, :master, :discover, :american_express, :jcb,
-       :switch, :solo, :maestro, :laser]
-
-
-      # Not implemented
-      AVS_CODE_TRANSLATOR = {
-        '1' => 'A',  # Street address matches, but 5-digit and 9-digit postal code do not match.
-        '2' => 'B',  # Street address matches, but postal code not verified.
-        '3' => 'C',  # Street address and postal code do not match.
-        '4' => 'D',  # Street address and postal code match.
-        '5' => 'E',  # AVS data is invalid or AVS is not allowed for this card type.
-        '6' => 'F',  # Card member's name does not match, but billing postal code matches.
-        '7' => 'G',  # Non-U.S. issuing bank does not support AVS.
-        '8' => 'H',  # Card member's name does not match. Street address and postal code match.
-        '9' => 'I',  # Address not verified.
-        '10' => 'J', # Card member's name, billing address, and postal code match. Shipping information verified
-                     #     and chargeback protection guaranteed through the Fraud Protection Program.
-        '11' => 'K', # Card member's name matches but billing address and billing postal code do not match.
-        '12' => 'L', # Card member's name and billing postal code match, but billing address does not match.
-        '13' => 'M', # Street address and postal code match.
-        '14' => 'N', # Street address and postal code do not match.
-        '15' => 'O', # Card member's name and billing address match, but billing postal code does not match.
-        '16' => 'P', # Postal code matches, but street address not verified.
-        '17' => 'Q', # Card member's name, billing address, and postal code match. Shipping information verified
-                     #     but chargeback protection not guaranteed.
-        '18' => 'R', # System unavailable.
-        '19' => 'S', # U.S.-issuing bank does not support AVS.
-        '20' => 'T', # Card member's name does not match, but street address matches.
-        '21' => 'U', # Address information unavailable.
-        '22' => 'V', # Card member's name, billing address, and billing postal code match.
-        '23' => 'W', # Street address does not match, but 9-digit postal code matches.
-        '24' => 'X', # Street address and 9-digit postal code match.
-        '25' => 'Y', # Street address and 5-digit postal code match.
-        '26' => 'Z'  # Street address does not match, but 5-digit postal code matches.
-      }
+      self.supported_cardtypes = [:visa, :master, :discover, :american_express, 
+          :diners_club, :jcb, :switch, :solo, :maestro, :laser]
 
       # Not implemented
       CVC_CODE_TRANSLATOR = {
-        '1' => 'D', # CVV check flagged transaction as suspicious
-        '2' => 'I', # CVV failed data validation check
-        '3' => 'M', # CVV matches
-        '4' => 'N', # CVV does not match
-        '5' => 'P', # CVV not processed
-        '6' => 'S', # CVV should have been present
-        '7' => 'U', # CVV request unable to be processed by issuer
-        '8' => 'X'  # CVV check not supported for card
+        '124' => 'S', # CVV should have been present
+        '125' => 'N', # CVV does not match
+=begin
+        # Other Codes
+        '' => 'D', # CVV check flagged transaction as suspicious
+        '' => 'I', # CVV failed data validation check
+        '' => 'M', # CVV matches
+        '' => 'P', # CVV not processed
+        '' => 'U', # CVV request unable to be processed by issuer
+        '' => 'X'  # CVV check not supported for card
+=end
       }
 
       # Mapping of error codes from Mondido to Gateway class standard error codes
@@ -150,7 +109,118 @@ module ActiveMerchant #:nodoc:
         # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
         # API reference: http://doc.mondido.com/api#transaction-create
 
-        requires!(options, :order_id)
+        options[:process] = true
+        create_post_for_auth_or_purchase(money, payment, options)
+      end
+
+      def authorize(money, payment, options={})
+        # Validate the credit card and reserve the money for later collection
+
+        options[:process] = false
+        create_post_for_auth_or_purchase(money, payment, options)
+      end
+
+      def capture(money, authorization, options={})
+        # References a previous “Authorize” and requests that the money be drawn down.
+        # It’s good practice (required) in many juristictions not to take a payment from a
+        #   customer until the goods are shipped.
+        # not implemented
+      end
+
+      def refund(money, authorization, options={})
+        # Refund money to a card.
+        # This may need to be specifically enabled on your account and may not be supported by all gateways
+        requires!(options, :transaction_id, :amount, :reason)
+
+        post = {
+          # transaction_id  int *required
+          #   ID for the transaction to refund
+          :transaction_id => options[:transaction_id],
+
+          # amount decimal *required 
+          #   The amount to refund. Ex. 5.00
+          :amount => options[:amount],
+
+          # reason string *required
+          #   The reason for the refund. Ex. "Cancelled order"
+          :reason => options[:reason]
+
+        }
+
+        commit(:post, 'refunds', post)
+      end
+
+      def void(authorization, options={})
+        # Entirely void a transaction.
+        # not implemented
+      end
+
+      def verify(credit_card, options={})
+        # not implemented
+
+        #MultiResponse.run(:use_first_response) do |r|
+        #  r.process { authorize(100, credit_card, options) }
+        #  r.process(:ignore_result) { void(r.authorization, options) }
+        #end
+      end
+
+      def store(payment, options = {})
+        requires!(options, :customer_id)
+
+        post = {
+          # currency  string* required
+          :currency => self.default_currency,
+
+          # customer_ref  string
+          #   Merchant specific customer ID.
+          #   If this customer exists the card will be added to that customer.
+          #   If it doesn't exists a customer will be created.
+          :customer_ref => options[:customer_ref].to_s,
+
+          # customer_id int
+          #   Merchant specific customer ID.
+          #   If this customer exists the card will be added to that customer.
+          #   If it doesn't exists a customer will be created.
+          :customer_id => options[:customer_id],
+
+          # encrypted (string)
+          #   A comma separated string for the params that you send encrypted.
+          #   Ex. "card_number,card_cvv"
+          :encrypted => '',
+
+          # test bool
+          #   Must be true if you are using a test card number.
+          :test => test?
+
+        }
+
+        add_credit_card(post, payment)
+        commit(:post, 'stored_cards', post)
+      end
+
+      def unstore(id)
+        commit(:delete, "stored_cards/#{id}")
+      end
+
+      def supports_scrubbing?
+        true
+      end
+
+      def scrub(transcript)
+        transcript.
+          gsub(%r((Authorization: Basic )\w+), '\1[FILTERED]').
+          gsub(%r((card_holder=)\w+), '\1[FILTERED]').
+          gsub(%r((card_cvv=)\d+), '\1[FILTERED]').
+          gsub(%r((card_expiry=)\w+), '\1[FILTERED]').
+          gsub(%r((card_number=)\d+), '\1[FILTERED]').
+          gsub(%r((card_type=)\w+), '\1[FILTERED]').
+          gsub(%r((hash=)\w+), '\1[FILTERED]').
+          gsub(%r((amount=)\w+), '\1[FILTERED]')
+      end
+
+      private
+
+      def create_post_for_auth_or_purchase(money, payment, options={})    
         # A complete (original) options hash might be:
         # options = {
         #   :order_id => '1',
@@ -177,9 +247,15 @@ module ActiveMerchant #:nodoc:
         ## There are :billing_address, :shipping_address, or you can just pass in
         ## :address and it will be used for both.
 
-        ## New options introduced by Mondido Gateway
-        #  :metadata    => (string) Metadata is custom schemaless information that you can choose to send in to Mondido.
-        #                  It can be information about the customer, the product or about campaigns or offers.
+        ## Options Specific for Mondido Gateway - documentation below
+        #  :process
+        #  :metadata
+        #  :plan_id
+        #  :customer_ref
+        #  :webhook
+
+        requires!(options, :order_id)
+        options[:order_id] = options[:order_id].to_s
 
         post = {
           # decimal* required
@@ -188,11 +264,7 @@ module ActiveMerchant #:nodoc:
 
           # string* required
           # Merchant order/payment ID
-          :payment_ref => options[:order_id].to_s,
-
-          # boolean
-          # Whether the transaction is a test transaction. Defaults false
-          :test => test?,
+          :payment_ref => options[:order_id],
 
           # string* required
           # The currency (SEK, CAD, CNY, COP, CZK, DKK, HKD, HUF, ISK, INR, ILS, JPY, KES, KRW,
@@ -200,95 +272,62 @@ module ActiveMerchant #:nodoc:
           #  AED, GBP, USD, TWD, VEF, RON, TRY, EUR, UAH, PLN, BRL)
           :currency => get_currency(money, options),
 
-          # string
-          # The merchant specific user/customer ID
-          :customer_ref => (options[:custom_ref] || '').to_s,
-
           # string * required
           # The hash is a MD5 encoded string with some of your merchant and order specific parameters,
           # which is used to verify the payment, and make sure that it is not altered in any way.
-          :hash => transaction_hash_for(money, payment, options)
+          :hash => transaction_hash_for(money, options)
         }
 
-        # Metadata (string)
-        # Merchant custom Metadata:
+        ## API Optional Parameters
+        #
+        # - test
+        # - process
+        # - metadata
+        # - plan id
+        # - customer_ref
+        # - webhook
+
+        # test (boolean)
+        #   Whether the transaction is a test transaction. Defaults false
+        post[:test] = test?
+
+        # process (bolean)
+        #   Should be false if you want to process the payment at a later stage.
+        #   You will not need to send in card data (card_number, card_cvv, card_holder, card_expiry) in this case.
+        post[:process] = options[:process]
+
+        # Merchant custom Metadata (string)
         #   Metadata is custom schemaless information that you can choose to send in to Mondido.
         #   It can be information about the customer, the product or about campaigns or offers.
         #
         #   The metadata can be used to customize your hosted payment window or sending personalized
         #   receipts to your customers in a webhook.
+        #
+        #   Details: http://doc.mondido.com/api#metadata
         post.merge!( :metadata => options[:metadata] ) if options[:metadata]
-        
+
+        # Plan ID (int)
+        #   The ID of the subscription plan.
+        post.merge!( :plan_id => options[:plan_id] ) if options[:plan_id]
+
+        # customer_ref (string)
+        #   The merchant specific user/customer ID
+        post.merge!( :customer_ref => options[:customer_ref].to_s ) if options[:customer_ref]
+
+        # webhook (object)
+        #   You can specify a custom Webhook for a transaction.
+        #   For example sending e-mail or POST to your backend.
+        #   Details: http://doc.mondido.com/api#webhook
+        post.merge!( :webhook => options[:webhook] ) if options[:webhook]
+
+
         add_credit_card(post, payment)
         #add_address(post, payment, options)
         #add_customer_data(post, options)
-
         commit(:post, 'transactions', post)
       end
 
-      def authorize(money, payment, options={})
-        # Validate the credit card and reserve the money for later collection
-
-        # not implemented
-        return
-      end
-
-      def capture(money, authorization, options={})
-        # References a previous “Authorize” and requests that the money be drawn down.
-        # It’s good practice (required) in many juristictions not to take a payment from a
-        #   customer until the goods are shipped.
-
-        # not implemented
-        return
-      end
-
-      def refund(money, authorization, options={})
-        # Refund money to a card.
-        # This may need to be specifically enabled on your account and may not be supported by all gateways
-
-        # not implemented
-        return
-
-        #post = {}
-        #commit(:post, 'refunds', post)
-      end
-
-      def void(authorization, options={})
-        # Entirely void a transaction.
-
-        # not implemented
-        return
-      end
-
-      def verify(credit_card, options={})
-        # not implemented
-        return
-
-        #MultiResponse.run(:use_first_response) do |r|
-        #  r.process { authorize(100, credit_card, options) }
-        #  r.process(:ignore_result) { void(r.authorization, options) }
-        #end
-      end
-
-      def supports_scrubbing?
-        true
-      end
-
-      def scrub(transcript)
-        transcript.
-          gsub(%r((Authorization: Basic )\w+), '\1[FILTERED]').
-          gsub(%r((card_holder=)\w+), '\1[FILTERED]').
-          gsub(%r((card_cvv=)\d+), '\1[FILTERED]').
-          gsub(%r((card_expiry=)\w+), '\1[FILTERED]').
-          gsub(%r((card_number=)\d+), '\1[FILTERED]').
-          gsub(%r((card_type=)\w+), '\1[FILTERED]').
-          gsub(%r((hash=)\w+), '\1[FILTERED]').
-          gsub(%r((amount=)\w+), '\1[FILTERED]')
-      end
-
-      private
-
-      def transaction_hash_for(money, payment, options={})
+      def transaction_hash_for(money, options={})
         # Hash recipe: MD5(merchant_id + payment_ref + customer_ref + amount + currency + test + secret)
         # Important to know about the hash-attributes
         # (1)  merchant_id (integer): your merchant id
@@ -300,9 +339,9 @@ module ActiveMerchant #:nodoc:
         # (7)  secret (string): Unique merchant specific string
 
         hash_attributes = @merchant_id.to_s                                 # 1
-        hash_attributes += options[:order_id].to_s                          # 2
-        hash_attributes += ""                                               # 3
-        hash_attributes += get_amount(money, options)                       # 4 #.round(2).to_s
+        hash_attributes += options[:order_id]                               # 2
+        hash_attributes += options[:customer_ref].to_s || ""                # 3
+        hash_attributes += get_amount(money, options)                       # 4
         hash_attributes += get_currency(money, options)                     # 5
         hash_attributes += ((test?) ? "test" : "")                          # 6
         hash_attributes += @hash_secret                                     # 7
@@ -323,13 +362,19 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_credit_card(post, credit_card)
-        # Need to implement add_payment for tokenized cards
-        # ...
         post[:card_holder] = credit_card.name if credit_card.name
         post[:card_cvv] = credit_card.verification_value if credit_card.verification_value?
         post[:card_expiry] = format(credit_card.month, :two_digits) + format(credit_card.year, :two_digits)
         post[:card_number] = credit_card.number
-        post[:card_type] = ActiveMerchant::Billing::CreditCard.brand?(credit_card.number)
+
+        # Stored card variables
+        # card_number => card_hash
+        # card_type   => 'stored_card'
+        if credit_card.respond_to?(:brand)
+          post[:card_type] = credit_card.brand
+        else
+          post[:card_type] = ActiveMerchant::Billing::CreditCard.brand?(credit_card.number)
+        end
       end
 
       def get_amount(money, options)
@@ -345,9 +390,21 @@ module ActiveMerchant #:nodoc:
         response = api_request(method, uri, parameters, options)
         success = (response["status"] == "approved")
 
-        # Not implemented yet
-        avs_code = AVS_CODE_TRANSLATOR["25"]
-        cvc_code = CVC_CODE_TRANSLATOR["3"]
+        # Mondido doesn't check the purchase address vs billing address
+        # So we use the standard code 'E'.
+        # 'E' => AVS data is invalid or AVS is not allowed for this card type.
+        # For more codes, please see the AVSResult class
+        avs_code = 'E'
+
+        # By default, we understand that the CVV matched (code "M")
+        # But we find the error 124 or 125, we report the
+        # related CVC Code to Active Merchant gem
+        # 124: errors.card_cvv.missing
+        # 125: errors.card_cvv.invalid
+        cvc_code = "M"
+        if not success? and ["124","125"].include? response["code"]
+          cvc_code = CVC_CODE_TRANSLATOR[ response["code"] ]
+        end
 
         Response.new(
           success,
