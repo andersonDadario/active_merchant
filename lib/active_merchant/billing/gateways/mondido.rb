@@ -322,7 +322,6 @@ module ActiveMerchant #:nodoc:
 
 
         add_credit_card(post, payment)
-        #add_address(post, payment, options)
         #add_customer_data(post, options)
         commit(:post, 'transactions', post)
       end
@@ -354,10 +353,6 @@ module ActiveMerchant #:nodoc:
 
 
       def add_customer_data(post, options)
-        # Not implemented yet
-      end
-
-      def add_address(post, creditcard, options)
         # Not implemented yet
       end
 
@@ -402,7 +397,7 @@ module ActiveMerchant #:nodoc:
         # 124: errors.card_cvv.missing
         # 125: errors.card_cvv.invalid
         cvc_code = "M"
-        if not success? and ["124","125"].include? response["code"]
+        if not success and ["124","125"].include? response["code"]
           cvc_code = CVC_CODE_TRANSLATOR[ response["code"] ]
         end
 
