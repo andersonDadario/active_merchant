@@ -377,7 +377,6 @@ module ActiveMerchant #:nodoc:
 
       def commit(method, uri, parameters = nil, options = {})
         response = api_request(method, uri, parameters, options)
-        byebug
 
         success = !(response.count==3 and response.key?("name") \
           and response.key?("code") and response.key?("description"))
