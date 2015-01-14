@@ -66,8 +66,8 @@ module ActiveMerchant #:nodoc:
       # Mapping of CVV check result codes from Mondido to CVVResult standard codes
       # For more codes, please check the CVVResult class
       CVC_CODE_TRANSLATOR = {
-        '124' => 'S', # CVV should have been present
-        '125' => 'N', # CVV does not match
+        'errors.card_cvv.missing' => 'S', # CVV should have been present
+        'errors.card_cvv.invalid' => 'N', # CVV does not match
       }
 
       # Mapping of error codes from Mondido to Gateway class standard error codes
@@ -377,7 +377,9 @@ module ActiveMerchant #:nodoc:
 
       def commit(method, uri, parameters = nil, options = {})
         response = api_request(method, uri, parameters, options)
-        success = (response["status"] == "approved")
+        byebug
+        
+        success = !(response.key?("name") and response.key?("code") and response.key?("description"))
 
         # Mondido doesn't check the purchase address vs billing address
         # So we use the standard code 'E'.
@@ -388,11 +390,9 @@ module ActiveMerchant #:nodoc:
         # By default, we understand that the CVV matched (code "M")
         # But we find the error 124 or 125, we report the
         # related CVC Code to Active Merchant gem
-        # 124: errors.card_cvv.missing
-        # 125: errors.card_cvv.invalid
         cvc_code = "M"
-        if not success and ["124","125"].include? response["code"]
-          cvc_code = CVC_CODE_TRANSLATOR[ response["code"] ]
+        if not success and ["errors.card_cvv.invalid","errors.card_cvv.missing"].include? response["name"]
+          cvc_code = CVC_CODE_TRANSLATOR[ response["name"] ]
         end
 
         Response.new(
