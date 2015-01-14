@@ -378,8 +378,9 @@ module ActiveMerchant #:nodoc:
       def commit(method, uri, parameters = nil, options = {})
         response = api_request(method, uri, parameters, options)
         byebug
-        
-        success = !(response.key?("name") and response.key?("code") and response.key?("description"))
+
+        success = !(response.count==3 and response.key?("name") \
+          and response.key?("code") and response.key?("description"))
 
         # Mondido doesn't check the purchase address vs billing address
         # So we use the standard code 'E'.
