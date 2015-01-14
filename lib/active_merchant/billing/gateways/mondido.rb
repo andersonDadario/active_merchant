@@ -400,8 +400,8 @@ module ActiveMerchant #:nodoc:
           success,
           (success ? "Transaction approved" : response["description"]),
           response,
-          test: response["test"],
-          authorization: success ? response["id"] : response["description"],
+          :test => response["test"],
+          :authorization => success ? response["id"] : response["description"],
           :avs_result => { :code => avs_code },
           :cvv_result => cvc_code,
           :error_code => success ? nil : STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]
