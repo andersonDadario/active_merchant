@@ -63,19 +63,11 @@ module ActiveMerchant #:nodoc:
       self.supported_cardtypes = [:visa, :master, :discover, :american_express, 
           :diners_club, :jcb, :switch, :solo, :maestro, :laser]
 
-      # Not implemented
+      # Mapping of CVV check result codes from Mondido to CVVResult standard codes
+      # For more codes, please check the CVVResult class
       CVC_CODE_TRANSLATOR = {
         '124' => 'S', # CVV should have been present
         '125' => 'N', # CVV does not match
-=begin
-        # Other Codes
-        '' => 'D', # CVV check flagged transaction as suspicious
-        '' => 'I', # CVV failed data validation check
-        '' => 'M', # CVV matches
-        '' => 'P', # CVV not processed
-        '' => 'U', # CVV request unable to be processed by issuer
-        '' => 'X'  # CVV check not supported for card
-=end
       }
 
       # Mapping of error codes from Mondido to Gateway class standard error codes
@@ -165,7 +157,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def store(payment, options = {})
-        unless options[:customer_ref] and options[:customer_id]
+        if options[:customer_ref].nil? and options[:customer_id].nil?
           raise "Parameter customer_ref or customer_id must be present."
         end
 
@@ -390,7 +382,7 @@ module ActiveMerchant #:nodoc:
         # Mondido doesn't check the purchase address vs billing address
         # So we use the standard code 'E'.
         # 'E' => AVS data is invalid or AVS is not allowed for this card type.
-        # For more codes, please see the AVSResult class
+        # For more codes, please check the AVSResult class
         avs_code = 'E'
 
         # By default, we understand that the CVV matched (code "M")
