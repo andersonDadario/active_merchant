@@ -165,7 +165,9 @@ module ActiveMerchant #:nodoc:
       end
 
       def store(payment, options = {})
-        requires!(options, :customer_id)
+        unless options[:customer_ref] and options[:customer_id]
+          raise "Parameter customer_ref or customer_id must be present."
+        end
 
         post = {
           # currency  string* required
@@ -178,9 +180,9 @@ module ActiveMerchant #:nodoc:
           :customer_ref => options[:customer_ref].to_s,
 
           # customer_id int
-          #   Merchant specific customer ID.
+          #   Mondido specific customer ID.
           #   If this customer exists the card will be added to that customer.
-          #   If it doesn't exists a customer will be created.
+          #   If it doesn't exists an error will occur.
           :customer_id => options[:customer_id],
 
           # encrypted (string)
