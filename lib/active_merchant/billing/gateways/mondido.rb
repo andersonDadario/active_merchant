@@ -1,3 +1,4 @@
+require 'openssl'
 require 'digest'
 require 'base64'
 require 'json'
@@ -17,49 +18,9 @@ module ActiveMerchant #:nodoc:
       # :cents    => integer with cents (e.g., 1000 = $10.00)
       self.money_format = :dollars
 
-      # Need to confirm if there is more ...
-      self.supported_countries = %w(SE)
+      self.supported_countries = %w(AT BE BG HR CY CZ DK EE FI FR DE GI GR HU IS IM IT LV LI 
+        LT LU MC NL NO PL PT IE MT RO SK SI ES SE CH GB)
 
-=begin
-      [ FROM MONDIDO DOCS ]
-      Supported Card Types
-
-      Default card types that you will have access to are VISA and Mastercard,
-      but the other such as AMEX, JCB and Diners are on separate contracts.
-      Contact support for more information about card types.
-
-      visa (Visa)
-      mastercard (MasterCard)
-      maestro (Maestro)
-      electron (Electron)
-      debit_mastercard (Debit MasterCard)
-      visa_debit (Visa Debit)
-      laser (Laser)
-      solo (Solo)
-      amex (American Express)
-      diners (Diners)
-      uk_maestro (UK Maestro)
-      jcb (JCB)
-      ukash_neo (Ukash NEO)
-      discover (Discover)
-      stored_card (Stored Card)
-
-      [ FROM ACTIVE MERCHANT DOCS ]
-      Credit Card Types
-
-      :visa – Visa
-      :master – MasterCard
-      :discover – Discover Card
-      :american_express – American Express
-      :diners_club – Diners Club
-      :jcb – JCB
-      :switch – UK Maestro, formerly Switch
-      :solo – Solo
-      :dankort – Dankort
-      :maestro – International Maestro
-      :forbrugsforeningen – Forbrugsforeningen
-      :laser – Laser
-=end
       self.supported_cardtypes = [:visa, :master, :discover, :american_express, 
           :diners_club, :jcb, :switch, :solo, :maestro, :laser]
 
@@ -94,6 +55,11 @@ module ActiveMerchant #:nodoc:
         @api_token = options[:api_token]
         @hash_secret = options[:hash_secret]
 
+        # Optional: RSA Encryption
+        if options[:rsa_public_key]
+          @rsa_public_key = OpenSSL::PKey::RSA.new(options[:rsa_public_key])
+        end
+
         super
       end
 
@@ -101,14 +67,14 @@ module ActiveMerchant #:nodoc:
         # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
         # API reference: http://doc.mondido.com/api#transaction-create
 
-        options[:process] = true
+        options[:authorize] = true
         create_post_for_auth_or_purchase(money, payment, options)
       end
 
       def authorize(money, payment, options={})
         # Validate the credit card and reserve the money for later collection
 
-        options[:process] = false
+        options[:authorize] = false
         create_post_for_auth_or_purchase(money, payment, options)
       end
 
@@ -116,27 +82,34 @@ module ActiveMerchant #:nodoc:
         # References a previous “Authorize” and requests that the money be drawn down.
         # It’s good practice (required) in many juristictions not to take a payment from a
         #   customer until the goods are shipped.
-        # not implemented
+
+        requires!(options, :amount)
+        put = {
+          # amount decimal *required 
+          #   The amount to refund. Ex. 5.00
+          :amount => get_amount(money, options)
+        }
+
+        commit(:put, "transactions/#{authorization}/capture", put)
       end
 
       def refund(money, authorization, options={})
         # Refund money to a card.
         # This may need to be specifically enabled on your account and may not be supported by all gateways
-        requires!(options, :transaction_id, :amount, :reason)
 
+        requires!(options, :transaction_id, :reason)
         post = {
           # transaction_id  int *required
           #   ID for the transaction to refund
-          :transaction_id => options[:transaction_id],
+          :transaction_id => authorization.to_i,
 
           # amount decimal *required 
           #   The amount to refund. Ex. 5.00
-          :amount => options[:amount],
+          :amount => get_amount(money, options),
 
           # reason string *required
           #   The reason for the refund. Ex. "Cancelled order"
           :reason => options[:reason]
-
         }
 
         commit(:post, 'refunds', post)
@@ -144,16 +117,19 @@ module ActiveMerchant #:nodoc:
 
       def void(authorization, options={})
         # Entirely void a transaction.
-        # not implemented
+        # Any amount into a refund will cancel the whole reservation
+
+        refund(100, authorization, options)
       end
 
       def verify(credit_card, options={})
-        # not implemented
+        # Test a payment authorizing a value of 1.00
+        # Then void the transaction and refund the value
 
-        #MultiResponse.run(:use_first_response) do |r|
-        #  r.process { authorize(100, credit_card, options) }
-        #  r.process(:ignore_result) { void(r.authorization, options) }
-        #end
+        MultiResponse.run(:use_first_response) do |r|
+          r.process { authorize(100, credit_card, options) }
+          r.process(:ignore_result) { void(r.authorization, options) }
+        end
       end
 
       def store(payment, options = {})
@@ -163,7 +139,7 @@ module ActiveMerchant #:nodoc:
 
         post = {
           # currency  string* required
-          :currency => self.default_currency,
+          :currency => options[:currency] || self.default_currency,
 
           # customer_ref  string
           #   Merchant specific customer ID.
@@ -188,6 +164,7 @@ module ActiveMerchant #:nodoc:
 
         }
 
+        add_encryption(post)
         add_credit_card(post, payment)
         commit(:post, 'stored_cards', post)
       end
@@ -269,26 +246,26 @@ module ActiveMerchant #:nodoc:
           # string * required
           # The hash is a MD5 encoded string with some of your merchant and order specific parameters,
           # which is used to verify the payment, and make sure that it is not altered in any way.
-          :hash => transaction_hash_for(money, options)
+          :hash => transaction_hash_for(money, options),
         }
 
         ## API Optional Parameters
         #
         # - test
-        # - process
+        # - authorize
         # - metadata
         # - plan id
         # - customer_ref
         # - webhook
+        # - process
 
         # test (boolean)
         #   Whether the transaction is a test transaction. Defaults false
         post[:test] = test?
 
-        # process (bolean)
-        #   Should be false if you want to process the payment at a later stage.
-        #   You will not need to send in card data (card_number, card_cvv, card_holder, card_expiry) in this case.
-        post[:process] = options[:process]
+        # authorize (boolean)
+        #   [ Not documented; default false ]
+        post[:authorize] = options[:authorize]
 
         # Merchant custom Metadata (string)
         #   Metadata is custom schemaless information that you can choose to send in to Mondido.
@@ -314,9 +291,14 @@ module ActiveMerchant #:nodoc:
         #   Details: http://doc.mondido.com/api#webhook
         post.merge!( :webhook => options[:webhook] ) if options[:webhook]
 
+        # process (boolean)
+        #   Should be false if you want to process the payment at a later stage.
+        #   You will not need to send in card data
+        #   (card_number, card_cvv, card_holder, card_expiry) in this case.
+        post.merge!( :process => options[:process] ) if options[:process]
 
+        add_encryption(post)
         add_credit_card(post, payment)
-        #add_customer_data(post, options)
         commit(:post, 'transactions', post)
       end
 
@@ -333,7 +315,7 @@ module ActiveMerchant #:nodoc:
 
         hash_attributes = @merchant_id.to_s                                 # 1
         hash_attributes += options[:order_id]                               # 2
-        hash_attributes += options[:customer_ref].to_s || ""                # 3
+        hash_attributes += options[:customer_ref].to_s                      # 3
         hash_attributes += get_amount(money, options)                       # 4
         hash_attributes += get_currency(money, options)                     # 5
         hash_attributes += ((test?) ? "test" : "")                          # 6
@@ -345,11 +327,6 @@ module ActiveMerchant #:nodoc:
         return md5.hexdigest
       end
 
-
-      def add_customer_data(post, options)
-        # Not implemented yet
-      end
-
       def add_credit_card(post, credit_card)
         post[:card_holder] = credit_card.name if credit_card.name
         post[:card_cvv] = credit_card.verification_value if credit_card.verification_value?
@@ -357,13 +334,20 @@ module ActiveMerchant #:nodoc:
         post[:card_number] = credit_card.number
 
         # Stored card variables
-        # card_number => card_hash
-        # card_type   => 'stored_card'
+        #   card_number => card_hash
+        #   card_type   => 'stored_card'
         if credit_card.respond_to?(:brand)
           post[:card_type] = credit_card.brand
         else
           post[:card_type] = ActiveMerchant::Billing::CreditCard.brand?(credit_card.number)
         end
+      end
+
+      def add_encryption(post)
+          # encrypted (string)
+          #   A comma separated string for the params that you send encrypted.
+          #   Ex. "card_number,card_cvv"
+          post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,hash,amount,payment_ref,customer_ref'
       end
 
       def get_amount(money, options)
@@ -376,8 +360,36 @@ module ActiveMerchant #:nodoc:
       end  
 
       def commit(method, uri, parameters = nil, options = {})
+        # RSA Public Key Encryption
+        if @rsa_public_key and parameters.is_a? Hash and parameters.key?(:encrypted)
+          all_params = parameters[:encrypted].split(",")
+          invalid_params = []
+
+          all_params.each do |parameter|
+            if parameters[:"#{parameter}"]
+              encrypted_param = @rsa_public_key.public_encrypt(parameters[:"#{parameter}"])
+              parameters[:"#{parameter}"] = Base64.encode64(encrypted_param)
+            else
+              invalid_params << parameter
+            end
+          end
+
+          # Self-correctness of the "encrypted" param
+          # In case it points invalid parameters.
+          # For example: was expecting a optional parameter that, if passed, must be encrypted
+          # If not present, this self-correct mechanism will update the "encrypted" parameter
+          invalid_params.each do |invalid_param|
+            all_params.delete(invalid_param)
+          end
+
+          parameters[:encrypted] = all_params.join
+        end
+
+        # Perform Request
         response = api_request(method, uri, parameters, options)
 
+        # Construct the Response object below:
+        # Success of Response = absence of errors
         success = !(response.count==3 and response.key?("name") \
           and response.key?("code") and response.key?("description"))
 
