@@ -56,6 +56,7 @@ module ActiveMerchant #:nodoc:
         @hash_secret = options[:hash_secret]
 
         # Optional: RSA Encryption
+        @public_key = nil
         if options[:public_key]
           begin
             @public_key = OpenSSL::PKey::RSA.new(options[:public_key])
@@ -64,12 +65,30 @@ module ActiveMerchant #:nodoc:
           end
         end
 
+        # Optional: Certificate Hash Pinning (SHA256)
+        @certificate_hash_for_pinning = options[:certificate_hash_for_pinning]
+
         # Optional: Certificate Pinning
+        @certificate_for_pinning = nil
         if options[:certificate_for_pinning]
           begin
             @certificate_for_pinning = OpenSSL::X509::Certificate.new(options[:certificate_for_pinning])
           rescue OpenSSL::X509::CertificateError
             raise "Invalid Certificate length or format"
+          end
+        end
+
+        # Optional: Public Key Pinning
+        @public_key_for_pinning = nil
+        if options[:public_key_for_pinning]
+          begin
+            @public_key_for_pinning = OpenSSL::PKey::RSA.new(options[:public_key_for_pinning])
+          rescue OpenSSL::PKey::RSAError
+            begin
+              @public_key_for_pinning = OpenSSL::PKey::DSA.new(options[:public_key_for_pinning])
+            rescue OpenSSL::PKey::DSAError
+              raise "Invalid public key is neither RSA or DSA valid key."
+            end
           end
         end
 
@@ -80,14 +99,14 @@ module ActiveMerchant #:nodoc:
         # This is combined Authorize and Capture in one transaction. Sometimes we just want to take a payment!
         # API reference: http://doc.mondido.com/api#transaction-create
 
-        options[:authorize] = true
+        options[:authorize] = false
         create_post_for_auth_or_purchase(money, payment, options)
       end
 
       def authorize(money, payment, options={})
         # Validate the credit card and reserve the money for later collection
 
-        options[:authorize] = false
+        options[:authorize] = true
         create_post_for_auth_or_purchase(money, payment, options)
       end
 
@@ -360,7 +379,9 @@ module ActiveMerchant #:nodoc:
           # encrypted (string)
           #   A comma separated string for the params that you send encrypted.
           #   Ex. "card_number,card_cvv"
-          post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,hash,amount,payment_ref,customer_ref'
+          if @public_key
+            post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,hash,amount,payment_ref,customer_ref'
+          end
       end
 
       def get_amount(money, options)
@@ -403,7 +424,7 @@ module ActiveMerchant #:nodoc:
 
         # Construct the Response object below:
         # Success of Response = absence of errors
-        success = !(response.count==3 and response.key?("name") \
+        success = response.key?("error") or !(response.count==3 and response.key?("name") \
           and response.key?("code") and response.key?("description"))
 
         # Mondido doesn't check the purchase address vs billing address
@@ -424,7 +445,7 @@ module ActiveMerchant #:nodoc:
           success,
           (success ? "Transaction approved" : response["description"]),
           response,
-          :test => response["test"],
+          :test => response["test"] || test?,
           :authorization => success ? response["id"] : response["description"],
           :avs_result => { :code => avs_code },
           :cvv_result => cvc_code,
@@ -435,7 +456,7 @@ module ActiveMerchant #:nodoc:
       def api_request(method, uri, parameters = nil, options = {})
         raw_response = response = nil
         begin
-          if @certificate_for_pinning
+          if @certificate_for_pinning or @certificate_hash_for_pinning or @public_key_for_pinning
             uri = URI.parse(self.live_url + uri)
             http = Net::HTTP.new(uri.host, uri.port)
             http.use_ssl = true
@@ -457,13 +478,10 @@ module ActiveMerchant #:nodoc:
               # many times - once per certificate in the chain of trust, which is wasteful
               return true unless end_cert.to_der == cert_store.current_cert.to_der
 
-              # And verify the public key and the certificate fingerprint
-              if same_public_key?(end_cert, @certificate_for_pinning) \
-                and same_cert_fingerprint?(end_cert, @certificate_for_pinning)
-                  return true
-              else
-                  return false
-              end
+              # And verify what is pinned
+              return same_cert_fingerprint?(end_cert, hash: @certificate_hash_for_pinning) if @certificate_hash_for_pinning
+              return same_cert_fingerprint?(end_cert, cert: @certificate_for_pinning) if @certificate_for_pinning
+              return same_public_key?(end_cert, @certificate_for_pinning) if @public_key_for_pinning
             end
 
             # Request Object
@@ -481,8 +499,16 @@ module ActiveMerchant #:nodoc:
             # Response
             begin
               raw_response = http.request(request)
-            rescue OpenSSL::SSL::SSLError
-              raise "Security Problem: pinned certificate doesn't match the server certificate."
+            rescue OpenSSL::SSL::SSLError => e
+              error = e.message
+
+              if @certificate_for_pinning or @certificate_hash_for_pinning
+                error = "Security Problem: pinned certificate doesn't match the server certificate."
+              elsif @public_key_for_pinning
+                error = "Security Problem: pinned public key doesn't match the server public key."
+              end
+
+              return unexpected_error(error)
             end
             raw_response_body = raw_response.body
           else
@@ -493,7 +519,13 @@ module ActiveMerchant #:nodoc:
               headers(options)
             )
           end
-
+puts "=================================================="
+puts "Parameters: #{parameters}"
+puts "=================================================="
+puts "Headers: #{headers(options)}"
+puts "=================================================="
+puts "Response: #{raw_response_body}"
+puts "=================================================="
           response = parse(raw_response_body)
         rescue ResponseError => e
           raw_response = e.response.body
@@ -516,8 +548,13 @@ module ActiveMerchant #:nodoc:
         true
       end
 
-      def same_cert_fingerprint?(ref_cert, actual_cert)
-        OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) ==  OpenSSL::Digest::SHA256.hexdigest(actual_cert.to_der)
+      def same_cert_fingerprint?(ref_cert, parameters={})
+        if parameters.key?(:hash)
+          return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) ==  parameters[:hash]
+        else
+          return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) ==  \
+                      OpenSSL::Digest::SHA256.hexdigest(parameters[:cert].to_der)
+        end
       end
 
       def post_data(params)
@@ -565,10 +602,14 @@ module ActiveMerchant #:nodoc:
         msg += "  Please contact support@mondido.com if you continue to receive this message.\n"
         msg += "  (The raw response returned by the API was #{raw_response.inspect})"
 
+        unexpected_error(msg)
+      end
+
+      def unexpected_error(msg)
         {
-          "error" => {
-            "description" => msg
-          }
+          "name" => "errors.unexpected",
+          "description" => msg,
+          "code" => 133
         }
       end
 
