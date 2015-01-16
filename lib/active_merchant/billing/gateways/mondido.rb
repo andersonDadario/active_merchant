@@ -479,6 +479,7 @@ module ActiveMerchant #:nodoc:
             end
 
             # Response
+byebug
             begin
               raw_response = http.request(request)
             rescue OpenSSL::SSL::SSLError
