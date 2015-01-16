@@ -395,7 +395,7 @@ module ActiveMerchant #:nodoc:
             all_params.delete(invalid_param)
           end
 
-          parameters[:encrypted] = all_params.join
+          parameters[:encrypted] = all_params.join(',')
         end
 
         # Perform Request
