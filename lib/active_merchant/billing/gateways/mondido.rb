@@ -56,8 +56,21 @@ module ActiveMerchant #:nodoc:
         @hash_secret = options[:hash_secret]
 
         # Optional: RSA Encryption
-        if options[:rsa_public_key]
-          @rsa_public_key = OpenSSL::PKey::RSA.new(options[:rsa_public_key])
+        if options[:public_key]
+          begin
+            @public_key = OpenSSL::PKey::RSA.new(options[:public_key])
+          rescue OpenSSL::PKey::RSAError
+            raise "Invalid RSA Key length or format"
+          end
+        end
+
+        # Optional: Certificate Pinning
+        if options[:certificate_for_pinning]
+          begin
+            @certificate_for_pinning = OpenSSL::X509::Certificate.new(options[:certificate_for_pinning])
+          rescue OpenSSL::X509::CertificateError
+            raise "Invalid Certificate length or format"
+          end
         end
 
         super
@@ -361,13 +374,13 @@ module ActiveMerchant #:nodoc:
 
       def commit(method, uri, parameters = nil, options = {})
         # RSA Public Key Encryption
-        if @rsa_public_key and parameters.is_a? Hash and parameters.key?(:encrypted)
+        if @public_key and parameters.is_a? Hash and parameters.key?(:encrypted)
           all_params = parameters[:encrypted].split(",")
           invalid_params = []
 
           all_params.each do |parameter|
             if parameters[:"#{parameter}"]
-              encrypted_param = @rsa_public_key.public_encrypt(parameters[:"#{parameter}"])
+              encrypted_param = @public_key.public_encrypt(parameters[:"#{parameter}"])
               parameters[:"#{parameter}"] = Base64.encode64(encrypted_param)
             else
               invalid_params << parameter
@@ -422,14 +435,62 @@ module ActiveMerchant #:nodoc:
       def api_request(method, uri, parameters = nil, options = {})
         raw_response = response = nil
         begin
-          raw_response = ssl_request(
-            method,
-            self.live_url + uri,
-            post_data(parameters),
-            headers(options)
-          )
+          if @certificate_for_pinning
+            uri = URI.parse(self.live_url + uri)
+            http = Net::HTTP.new(uri.host, uri.port)
+            http.use_ssl = true
+            http.verify_mode = OpenSSL::SSL::VERIFY_PEER
+            http.verify_callback = lambda do | preverify_ok, cert_store |
+              return false unless preverify_ok
 
-          response = parse(raw_response)
+              # We only want to verify once, and fail the first time the callback
+              # is invoked (as opposed to checking only the last time it's called).
+              # Therefore we get at the whole authorization chain.
+              # The end certificate is at the beginning of the chain (the certificate
+              # for the host we are talking to)
+              end_cert = cert_store.chain[0]
+
+              # Only perform the checks if the current cert is the end certificate
+              # in the chain. We can compare using the DER representation
+              # (OpenSSL::X509::Certificate objects are not comparable, and for 
+              # a good reason). If we don't we are going to perform the verification
+              # many times - once per certificate in the chain of trust, which is wasteful
+              return true unless end_cert.to_der == cert_store.current_cert.to_der
+
+              # And verify the public key and the certificate fingerprint
+              if same_public_key?(end_cert, @certificate_for_pinning) \
+                and same_cert_fingerprint?(end_cert, @certificate_for_pinning)
+                  return true
+              else
+                  return false
+              end
+            end
+
+            # Request Object
+            request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri)"
+
+            # Post Data
+            request.set_form_data(parameters)
+
+            # Add Headers
+            all_headers = headers(options)
+            all_headers.keys.each do |header|
+              request.add_field(header, all_headers[header])
+            end
+
+            # Response
+            raw_response = http.request(request)
+            raw_response_body = raw_response.body
+          else
+            raw_response_body = ssl_request(
+              method,
+              self.live_url + uri,
+              post_data(parameters),
+              headers(options)
+            )
+          end
+
+          response = parse(raw_response_body)
         rescue ResponseError => e
           raw_response = e.response.body
           response = response_error(raw_response)
@@ -438,6 +499,21 @@ module ActiveMerchant #:nodoc:
         end
 
         response
+      end
+
+      def same_public_key?(ref_cert, actual_cert)
+        pkr, pka = ref_cert.public_key, actual_cert.public_key
+
+        # First check if the public keys use the same crypto...
+        return false unless pkr.class == pka.class
+        # ...and then - that they have the same contents
+        return false unless pkr.to_pem == pka.to_pem
+
+        true
+      end
+
+      def same_cert_fingerprint?(ref_cert, actual_cert)
+        OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) ==  OpenSSL::Digest::SHA256.hexdigest(actual_cert.to_der)
       end
 
       def post_data(params)
