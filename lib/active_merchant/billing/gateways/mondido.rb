@@ -360,7 +360,7 @@ module ActiveMerchant #:nodoc:
           # encrypted (string)
           #   A comma separated string for the params that you send encrypted.
           #   Ex. "card_number,card_cvv"
-          post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,hash,amount,payment_ref,customer_ref'
+          post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,hash,amount,payment_ref,customer_ref'
       end
 
       def get_amount(money, options)
@@ -470,7 +470,7 @@ module ActiveMerchant #:nodoc:
             request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri)"
 
             # Post Data
-            request.set_form_data(parameters)
+            request.set_form_data(parameters) if parameters
 
             # Add Headers
             all_headers = headers(options)
@@ -479,7 +479,6 @@ module ActiveMerchant #:nodoc:
             end
 
             # Response
-byebug
             begin
               raw_response = http.request(request)
             rescue OpenSSL::SSL::SSLError
