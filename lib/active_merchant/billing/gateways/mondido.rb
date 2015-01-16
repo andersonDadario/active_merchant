@@ -479,7 +479,11 @@ module ActiveMerchant #:nodoc:
             end
 
             # Response
-            raw_response = http.request(request)
+            begin
+              raw_response = http.request(request)
+            rescue OpenSSL::SSL::SSLError
+              raise "Security Problem: pinned certificate doesn't match the server certificate."
+            end
             raw_response_body = raw_response.body
           else
             raw_response_body = ssl_request(
