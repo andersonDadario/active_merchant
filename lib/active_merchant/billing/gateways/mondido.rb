@@ -2,6 +2,7 @@ require 'openssl'
 require 'digest'
 require 'base64'
 require 'json'
+require 'logger'
 
 module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
@@ -87,7 +88,7 @@ module ActiveMerchant #:nodoc:
             begin
               @public_key_for_pinning = OpenSSL::PKey::DSA.new(options[:public_key_for_pinning])
             rescue OpenSSL::PKey::DSAError
-              raise "Invalid public key is neither RSA or DSA valid key."
+              raise "Invalid public key is neither a valid RSA or DSA key."
             end
           end
         end
@@ -296,8 +297,8 @@ module ActiveMerchant #:nodoc:
         post[:test] = test?
 
         # authorize (boolean)
-        #   [ Not documented; default false ]
-        post[:authorize] = options[:authorize]
+        #   [ Not documented ]
+        post.merge!( :authorize => options[:authorize] ) if options[:authorize]
 
         # Merchant custom Metadata (string)
         #   Metadata is custom schemaless information that you can choose to send in to Mondido.
@@ -307,7 +308,12 @@ module ActiveMerchant #:nodoc:
         #   receipts to your customers in a webhook.
         #
         #   Details: http://doc.mondido.com/api#metadata
-        post.merge!( :metadata => options[:metadata] ) if options[:metadata]
+        if options[:metadata]
+          if options[:metadata].is_a? Hash
+            options[:metadata] = options[:metadata].to_json
+          end
+          post.merge!( :metadata => options[:metadata] ) 
+        end
 
         # Plan ID (int)
         #   The ID of the subscription plan.
@@ -321,7 +327,12 @@ module ActiveMerchant #:nodoc:
         #   You can specify a custom Webhook for a transaction.
         #   For example sending e-mail or POST to your backend.
         #   Details: http://doc.mondido.com/api#webhook
-        post.merge!( :webhook => options[:webhook] ) if options[:webhook]
+        if options[:webhook]
+          if options[:webhook].is_a? Hash
+            options[:webhook] = options[:webhook].to_json
+          end
+          post.merge!( :webhook => options[:webhook] ) 
+        end
 
         # process (boolean)
         #   Should be false if you want to process the payment at a later stage.
@@ -380,7 +391,8 @@ module ActiveMerchant #:nodoc:
           #   A comma separated string for the params that you send encrypted.
           #   Ex. "card_number,card_cvv"
           if @public_key
-            post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,hash,amount,payment_ref,customer_ref'
+            post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,hash,amount,payment_ref,customer_ref,currency'
+#post[:encrypted] = 'card_number,card_cvv'
           end
       end
 
@@ -441,6 +453,37 @@ module ActiveMerchant #:nodoc:
           cvc_code = CVC_CODE_TRANSLATOR[ response["name"] ]
         end
 
+
+if not success
+glorious_content = "==================================================\n"
+glorious_content += "Parameters: #{JSON.pretty_generate(parameters)}\n"
+glorious_content += "==================================================\n"
+if parameters
+  a = Net::HTTP::Post.new('api.mondido.com')
+  a.set_form_data(parameters)
+  glorious_content += "Post Data: #{a.body}\n"
+  glorious_content += "==================================================\n"
+end
+glorious_content += "Headers: #{JSON.pretty_generate(headers(options))}\n"
+glorious_content += "==================================================\n"
+glorious_content += "Response: #{JSON.pretty_generate(response)}\n"
+glorious_content += "==================================================\n"
+xamps =  Response.new(
+  success,
+  (success ? "Transaction approved" : response["description"]),
+  response,
+  :test => response["test"] || test?,
+  :authorization => success ? response["id"] : response["description"],
+  :avs_result => { :code => avs_code },
+  :cvv_result => cvc_code,
+  :error_code => success ? nil : STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]
+)
+glorious_content += "==================================================\n"
+glorious_content += "Response Obj: #{response.inspect}\n"
+
+File.write("/vagrant/myapp/pocs/mondido/log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content)
+end
+
         Response.new(
           success,
           (success ? "Transaction approved" : response["description"]),
@@ -455,78 +498,67 @@ module ActiveMerchant #:nodoc:
 
       def api_request(method, uri, parameters = nil, options = {})
         raw_response = response = nil
-        begin
-          if @certificate_for_pinning or @certificate_hash_for_pinning or @public_key_for_pinning
-            uri = URI.parse(self.live_url + uri)
-            http = Net::HTTP.new(uri.host, uri.port)
-            http.use_ssl = true
-            http.verify_mode = OpenSSL::SSL::VERIFY_PEER
-            http.verify_callback = lambda do | preverify_ok, cert_store |
-              return false unless preverify_ok
+        uri = URI.parse(self.live_url + uri)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = true
+        if @certificate_for_pinning or @certificate_hash_for_pinning or @public_key_for_pinning
+          http.verify_mode = OpenSSL::SSL::VERIFY_PEER
+          http.verify_callback = lambda do | preverify_ok, cert_store |
+            return false unless preverify_ok
 
-              # We only want to verify once, and fail the first time the callback
-              # is invoked (as opposed to checking only the last time it's called).
-              # Therefore we get at the whole authorization chain.
-              # The end certificate is at the beginning of the chain (the certificate
-              # for the host we are talking to)
-              end_cert = cert_store.chain[0]
+            # We only want to verify once, and fail the first time the callback
+            # is invoked (as opposed to checking only the last time it's called).
+            # Therefore we get at the whole authorization chain.
+            # The end certificate is at the beginning of the chain (the certificate
+            # for the host we are talking to)
+            end_cert = cert_store.chain[0]
 
-              # Only perform the checks if the current cert is the end certificate
-              # in the chain. We can compare using the DER representation
-              # (OpenSSL::X509::Certificate objects are not comparable, and for 
-              # a good reason). If we don't we are going to perform the verification
-              # many times - once per certificate in the chain of trust, which is wasteful
-              return true unless end_cert.to_der == cert_store.current_cert.to_der
+            # Only perform the checks if the current cert is the end certificate
+            # in the chain. We can compare using the DER representation
+            # (OpenSSL::X509::Certificate objects are not comparable, and for 
+            # a good reason). If we don't we are going to perform the verification
+            # many times - once per certificate in the chain of trust, which is wasteful
+            return true unless end_cert.to_der == cert_store.current_cert.to_der
 
-              # And verify what is pinned
-              return same_cert_fingerprint?(end_cert, hash: @certificate_hash_for_pinning) if @certificate_hash_for_pinning
-              return same_cert_fingerprint?(end_cert, cert: @certificate_for_pinning) if @certificate_for_pinning
-              return same_public_key?(end_cert, @certificate_for_pinning) if @public_key_for_pinning
-            end
+            # And verify what is pinned
+            return same_cert_fingerprint?(end_cert, hash: @certificate_hash_for_pinning) if @certificate_hash_for_pinning
+            return same_cert_fingerprint?(end_cert, cert: @certificate_for_pinning) if @certificate_for_pinning
+            return same_public_key?(end_cert.public_key, @public_key_for_pinning) if @public_key_for_pinning
 
-            # Request Object
-            request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri)"
-
-            # Post Data
-            request.set_form_data(parameters) if parameters
-
-            # Add Headers
-            all_headers = headers(options)
-            all_headers.keys.each do |header|
-              request.add_field(header, all_headers[header])
-            end
-
-            # Response
-            begin
-              raw_response = http.request(request)
-            rescue OpenSSL::SSL::SSLError => e
-              error = e.message
-
-              if @certificate_for_pinning or @certificate_hash_for_pinning
-                error = "Security Problem: pinned certificate doesn't match the server certificate."
-              elsif @public_key_for_pinning
-                error = "Security Problem: pinned public key doesn't match the server public key."
-              end
-
-              return unexpected_error(error)
-            end
-            raw_response_body = raw_response.body
-          else
-            raw_response_body = ssl_request(
-              method,
-              self.live_url + uri,
-              post_data(parameters),
-              headers(options)
-            )
+            false
           end
-puts "=================================================="
-puts "Parameters: #{parameters}"
-puts "=================================================="
-puts "Headers: #{headers(options)}"
-puts "=================================================="
-puts "Response: #{raw_response_body}"
-puts "=================================================="
-          response = parse(raw_response_body)
+        end
+
+        # Request Object
+        request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri)"
+
+        # Post Data
+        request.set_form_data(parameters) if parameters
+
+        # Add Headers
+        all_headers = headers(options)
+        all_headers.keys.each do |header|
+          request.add_field(header, all_headers[header])
+        end
+
+        # Response SSL Check
+        begin
+          raw_response = http.request(request)
+        rescue OpenSSL::SSL::SSLError => e
+          error = e.message
+
+          if @certificate_for_pinning or @certificate_hash_for_pinning
+            error = "Security Problem: pinned certificate doesn't match the server certificate."
+          elsif @public_key_for_pinning
+            error = "Security Problem: pinned public key doesn't match the server public key."
+          end
+
+          return unexpected_error(error)
+        end
+
+        # Response Formatting
+        begin
+          response = parse(raw_response.body)
         rescue ResponseError => e
           raw_response = e.response.body
           response = response_error(raw_response)
@@ -537,9 +569,9 @@ puts "=================================================="
         response
       end
 
-      def same_public_key?(ref_cert, actual_cert)
-        pkr, pka = ref_cert.public_key, actual_cert.public_key
-
+      def same_public_key?(pkr, pka)
+#File.write("/vagrant/myapp/pocs/mondido/pkr-#{Base64.encode64(Time.now.to_s).strip}.txt", pkr.to_pem)
+#File.write("/vagrant/myapp/pocs/mondido/pka-#{Base64.encode64(Time.now.to_s).strip}.txt", pka.to_pem)
         # First check if the public keys use the same crypto...
         return false unless pkr.class == pka.class
         # ...and then - that they have the same contents
@@ -550,30 +582,13 @@ puts "=================================================="
 
       def same_cert_fingerprint?(ref_cert, parameters={})
         if parameters.key?(:hash)
-          return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) ==  parameters[:hash]
+          return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) == parameters[:hash]
         else
-          return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) ==  \
-                      OpenSSL::Digest::SHA256.hexdigest(parameters[:cert].to_der)
+#File.write("/vagrant/myapp/pocs/mondido/cert1-#{Base64.encode64(Time.now.to_s).strip}-#{Base64.encode64(Time.now.to_s).strip}.txt", ref_cert.to_pem)
+#File.write("/vagrant/myapp/pocs/mondido/cert2-#{Base64.encode64(Time.now.to_s).strip}.txt", parameters[:cert].to_pem)
+          return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_pem) ==  \
+                      OpenSSL::Digest::SHA256.hexdigest(parameters[:cert].to_pem)
         end
-      end
-
-      def post_data(params)
-        return nil unless params
-
-        params.map do |key, value|
-          next if value.blank?
-          if value.is_a?(Hash)
-            h = {}
-            value.each do |k, v|
-              h["#{key}[#{k}]"] = v unless v.blank?
-            end
-            post_data(h)
-          elsif value.is_a?(Array)
-            value.map { |v| "#{key}[]=#{CGI.escape(v.to_s)}" }.join("&")
-          else
-            "#{key}=#{CGI.escape(value.to_s)}"
-          end
-        end.compact.join("&")
       end
 
       def headers(options = {})
