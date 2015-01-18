@@ -6,6 +6,7 @@ class RemoteMondidoTest < Test::Unit::TestCase
 # - stored card (@stored_card)
 # - declined stored card (@declined_stored_card)
 # - existing customer_id (generate_customer_ref_or_id function)
+# - plan id for recurring (generate_recurring)
 
   def setup
     start_params = fixtures(:mondido)
@@ -19,9 +20,6 @@ class RemoteMondidoTest < Test::Unit::TestCase
     start_params.delete :public_key
     @gateway = MondidoGateway.new(start_params)
 
-# Work Around until crypto works
-@gateway_encrypted = @gateway
-
     @amount = 1000 # $ 10.00
     @credit_card = credit_card('4111111111111111', { verification_value: '200' })
     @declined_card = credit_card('4111111111111111', { verification_value: '201' })
@@ -33,7 +31,11 @@ class RemoteMondidoTest < Test::Unit::TestCase
 # Work Around until get declined stored card
 @declined_stored_card = @declined_card
 
-    @options = { test: true, customer_ref: generate_customer_ref_or_id(true) }
+    @options = { test: true}#, customer_ref: generate_customer_ref_or_id(true) }
+    @store_options = {
+        :test => true,
+        :currency => 'sek',
+    }
 
 
     # The @base_order_id is for test purposes
@@ -98,16 +100,12 @@ class RemoteMondidoTest < Test::Unit::TestCase
   def store_response(encryption, existing_customer, identifier, success)
     gateway = encryption ? @gateway_encrypted : @gateway   
     card = success ? @credit_card : @declined_card
-    store_options = {
-        :test => true,
-        :currency => 'sek',
-    }
 
     if existing_customer and identifier
-      store_options[:"customer_#{identifier}"] = generate_customer_ref_or_id(existing_customer)
+      @store_options[:"customer_#{identifier}"] = generate_customer_ref_or_id(existing_customer)
     end
 
-    return gateway.store(card, store_options)
+    return gateway.store(card, @store_options)
   end
 
   def store_successful(encryption, existing_customer, identifier)
@@ -169,6 +167,7 @@ class RemoteMondidoTest < Test::Unit::TestCase
   # 8. Verify
   # 9. Store Card
   # 10. Unstore Card
+  # 11. Extendability
 
 
   ## 1. Scrubbing
@@ -180,7 +179,9 @@ class RemoteMondidoTest < Test::Unit::TestCase
     # and dump a transcript of the HTTP conversation so that
     # you can use that transcript as a reference while
     # implementing your scrubbing logic
-    #dump_transcript_and_fail(@gateway, @amount, @credit_card, @options)
+    #dump_transcript_and_fail(@gateway, @amount, @credit_card, @options.merge({
+    #    :order_id => generate_order_id
+    #}))
   end
 
   def test_transcript_scrubbing
@@ -1331,10 +1332,7 @@ ZwIDAQAB
   #
 
   def test_successful_unstore
-    store = @gateway.store(@credit_card, {
-      test: true,
-      currency: 'sek'
-    })
+    store = @gateway.store(@credit_card, @store_options)
     assert_success store
 
     unstore = @gateway.unstore(store.params["id"])
@@ -1344,7 +1342,24 @@ ZwIDAQAB
   def test_failed_unstore
     response = @gateway.unstore('')
     assert_failure response
-    # 500 Error
+  end
+
+  ## 11. Extendability
+  #
+
+  def test_successful_extendability
+    purchase = @gateway.purchase(@amount, @credit_card, @options.merge({
+        :order_id => generate_order_id,
+        :extend => "transaction"
+    }))
+    assert_success purchase
+
+    assert refund = @gateway.refund(@amount, purchase.authorization, {
+      :reason => "Test"
+    })
+    assert_success refund
+    assert_equal format_amount(@amount), purchase.params["amount"]
+    assert_equal "transaction", refund.params["transaction"]["payment_request"]["extend"]
   end
 
 end

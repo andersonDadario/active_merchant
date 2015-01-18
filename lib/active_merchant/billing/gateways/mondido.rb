@@ -120,6 +120,12 @@ module ActiveMerchant #:nodoc:
           #   The amount to refund. Ex. 5.00
           :amount => get_amount(money, options)
         }
+        # extend  string
+        #   Extentability
+        #   Many objects have child resources such as customer and stored card.
+        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
+        #   specifying to extend them in the url.
+        put.merge!( :extend => options[:extend].to_s ) if options[:extend]
 
         commit(:put, "transactions/#{authorization}/capture", put)
       end
@@ -142,6 +148,12 @@ module ActiveMerchant #:nodoc:
           #   The reason for the refund. Ex. "Cancelled order"
           :reason => options[:reason]
         }
+        # extend  string
+        #   Extentability
+        #   Many objects have child resources such as customer and stored card.
+        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
+        #   specifying to extend them in the url.
+        post.merge!( :extend => options[:extend].to_s ) if options[:extend]
 
         commit(:post, 'refunds', post)
       end
@@ -179,6 +191,13 @@ module ActiveMerchant #:nodoc:
           :test => test?
 
         }
+
+        # extend  string
+        #   Extentability
+        #   Many objects have child resources such as customer and stored card.
+        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
+        #   specifying to extend them in the url.
+        post.merge!( :extend => options[:extend].to_s ) if options[:extend]
 
         # customer_ref  string
         #   Merchant specific customer ID.
@@ -295,6 +314,13 @@ module ActiveMerchant #:nodoc:
         #   [ Not documented ]
         post.merge!( :authorize => options[:authorize] ) if options[:authorize]
 
+        # extend  string
+        #   Extentability
+        #   Many objects have child resources such as customer and stored card.
+        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
+        #   specifying to extend them in the url.
+        post.merge!( :extend => options[:extend].to_s ) if options[:extend]
+
         # Merchant custom Metadata (string)
         #   Metadata is custom schemaless information that you can choose to send in to Mondido.
         #   It can be information about the customer, the product or about campaigns or offers.
@@ -383,9 +409,8 @@ module ActiveMerchant #:nodoc:
           #   A comma separated string for the params that you send encrypted.
           #   Ex. "card_number,card_cvv"
           if @public_key
-            post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,hash,amount,payment_ref,customer_ref,currency'
-# For Debug:
-#post[:encrypted] = 'card_number,card_cvv'
+            post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,' + \
+              'hash,amount,payment_ref,customer_ref,customer_id,plan_id,currency,webhook,metadata,test'
           end
       end
 
@@ -399,6 +424,14 @@ module ActiveMerchant #:nodoc:
       end  
 
       def commit(method, uri, parameters = nil, options = {})
+# DEBUG CODE
+# Query String
+#query_string = ""
+#if parameters and parameters.key?(:extend)
+#  query_string = "?extend=#{parameters[:extend]}"
+#end
+
+
         # RSA Public Key Encryption
         if @public_key and parameters.is_a? Hash and parameters.key?(:encrypted)
           all_params = parameters[:encrypted].split(",")
@@ -406,8 +439,8 @@ module ActiveMerchant #:nodoc:
 
           all_params.each do |parameter|
             if parameters[:"#{parameter}"]
-              encrypted_param = @public_key.public_encrypt(parameters[:"#{parameter}"])
-              parameters[:"#{parameter}"] = Base64.encode64(encrypted_param)
+              encrypted_param = @public_key.public_encrypt( Base64.encode64(parameters[:"#{parameter}"].to_s ).rstrip )
+              parameters[:"#{parameter}"] = Base64.encode64(encrypted_param).rstrip
             else
               invalid_params << parameter
             end
@@ -457,9 +490,14 @@ module ActiveMerchant #:nodoc:
           :error_code => success ? nil : STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]
         )
 
+
 # My Debug Code [BEGIN]
 =begin
 glorious_content = "==================================================\n"
+uri = URI.parse(self.live_url + uri + query_string)
+glorious_content += "Method: #{method}\n"
+glorious_content += "Request URI: #{uri.request_uri}\n"
+glorious_content += "==================================================\n"
 if parameters
   glorious_content += "Parameters: #{JSON.pretty_generate(parameters)}\n"
   glorious_content += "==================================================\n"
@@ -480,7 +518,7 @@ if not success
 end
 glorious_content += "==================================================\n"
 glorious_content += "Response Obj: #{am_res.inspect}\n"
-File.write("/vagrant/myapp/pocs/mondido/log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content)
+File.write("../log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content)
 =end
 # Debug Code [END]
 
@@ -488,8 +526,18 @@ File.write("/vagrant/myapp/pocs/mondido/log-#{Base64.encode64(Time.now.to_s).str
       end
 
       def api_request(method, uri, parameters = nil, options = {})
+        # Query String
+        query_string = ""
+        if parameters and parameters.key?(:extend)
+          query_string = "?extend=#{parameters[:extend]}"
+          parameters.delete(:extend)
+          if parameters.count == 0
+            parameters = nil
+          end
+        end
+
         raw_response = response = nil
-        uri = URI.parse(self.live_url + uri)
+        uri = URI.parse(self.live_url + uri + query_string)
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = true
         if @certificate_for_pinning or @certificate_hash_for_pinning or @public_key_for_pinning
@@ -521,6 +569,10 @@ File.write("/vagrant/myapp/pocs/mondido/log-#{Base64.encode64(Time.now.to_s).str
         end
 
         # Request Object
+# For Debug (disable gzip)
+#request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri, {'Accept-Encoding' => 'identity'})"
+#http.set_debug_output($stdout)
+
         request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri)"
 
         # Post Data
