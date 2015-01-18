@@ -2,7 +2,6 @@ require 'openssl'
 require 'digest'
 require 'base64'
 require 'json'
-require 'logger'
 
 module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
@@ -116,7 +115,6 @@ module ActiveMerchant #:nodoc:
         # It’s good practice (required) in many juristictions not to take a payment from a
         #   customer until the goods are shipped.
 
-        requires!(options, :amount)
         put = {
           # amount decimal *required 
           #   The amount to refund. Ex. 5.00
@@ -130,7 +128,7 @@ module ActiveMerchant #:nodoc:
         # Refund money to a card.
         # This may need to be specifically enabled on your account and may not be supported by all gateways
 
-        requires!(options, :transaction_id, :reason)
+        requires!(options, :reason)
         post = {
           # transaction_id  int *required
           #   ID for the transaction to refund
@@ -158,6 +156,7 @@ module ActiveMerchant #:nodoc:
       def verify(credit_card, options={})
         # Test a payment authorizing a value of 1.00
         # Then void the transaction and refund the value
+        options[:reason] ||= "Active Merchant Test"
 
         MultiResponse.run(:use_first_response) do |r|
           r.process { authorize(100, credit_card, options) }
@@ -166,25 +165,9 @@ module ActiveMerchant #:nodoc:
       end
 
       def store(payment, options = {})
-        if options[:customer_ref].nil? and options[:customer_id].nil?
-          raise "Parameter customer_ref or customer_id must be present."
-        end
-
         post = {
           # currency  string* required
           :currency => options[:currency] || self.default_currency,
-
-          # customer_ref  string
-          #   Merchant specific customer ID.
-          #   If this customer exists the card will be added to that customer.
-          #   If it doesn't exists a customer will be created.
-          :customer_ref => options[:customer_ref].to_s,
-
-          # customer_id int
-          #   Mondido specific customer ID.
-          #   If this customer exists the card will be added to that customer.
-          #   If it doesn't exists an error will occur.
-          :customer_id => options[:customer_id],
 
           # encrypted (string)
           #   A comma separated string for the params that you send encrypted.
@@ -196,6 +179,18 @@ module ActiveMerchant #:nodoc:
           :test => test?
 
         }
+
+        # customer_ref  string
+        #   Merchant specific customer ID.
+        #   If this customer exists the card will be added to that customer.
+        #   If it doesn't exists a customer will be created.
+        post.merge!( :customer_ref => options[:customer_ref].to_s ) if options[:customer_ref]
+
+        # customer_id int
+        #   Mondido specific customer ID.
+        #   If this customer exists the card will be added to that customer.
+        #   If it doesn't exists an error will occur.
+        post.merge!( :customer_id => options[:customer_id] ) if options[:customer_id]
 
         add_encryption(post)
         add_credit_card(post, payment)
@@ -371,17 +366,14 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_credit_card(post, credit_card)
-        post[:card_holder] = credit_card.name if credit_card.name
-        post[:card_cvv] = credit_card.verification_value if credit_card.verification_value?
-        post[:card_expiry] = format(credit_card.month, :two_digits) + format(credit_card.year, :two_digits)
-        post[:card_number] = credit_card.number
-
-        # Stored card variables
-        #   card_number => card_hash
-        #   card_type   => 'stored_card'
-        if credit_card.respond_to?(:brand)
-          post[:card_type] = credit_card.brand
+        if credit_card.is_a? String      
+          post[:card_number] = credit_card
+          post[:card_type] = "STORED_CARD"
         else
+          post[:card_holder] = credit_card.name if credit_card.name
+          post[:card_cvv] = credit_card.verification_value if credit_card.verification_value?
+          post[:card_expiry] = format(credit_card.month, :two_digits) + format(credit_card.year, :two_digits)
+          post[:card_number] = credit_card.number
           post[:card_type] = ActiveMerchant::Billing::CreditCard.brand?(credit_card.number)
         end
       end
@@ -392,6 +384,7 @@ module ActiveMerchant #:nodoc:
           #   Ex. "card_number,card_cvv"
           if @public_key
             post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,hash,amount,payment_ref,customer_ref,currency'
+# For Debug:
 #post[:encrypted] = 'card_number,card_cvv'
           end
       end
@@ -436,7 +429,7 @@ module ActiveMerchant #:nodoc:
 
         # Construct the Response object below:
         # Success of Response = absence of errors
-        success = response.key?("error") or !(response.count==3 and response.key?("name") \
+        success = !(response.count==3 and response.key?("name") \
           and response.key?("code") and response.key?("description"))
 
         # Mondido doesn't check the purchase address vs billing address
@@ -453,38 +446,7 @@ module ActiveMerchant #:nodoc:
           cvc_code = CVC_CODE_TRANSLATOR[ response["name"] ]
         end
 
-
-if not success
-glorious_content = "==================================================\n"
-glorious_content += "Parameters: #{JSON.pretty_generate(parameters)}\n"
-glorious_content += "==================================================\n"
-if parameters
-  a = Net::HTTP::Post.new('api.mondido.com')
-  a.set_form_data(parameters)
-  glorious_content += "Post Data: #{a.body}\n"
-  glorious_content += "==================================================\n"
-end
-glorious_content += "Headers: #{JSON.pretty_generate(headers(options))}\n"
-glorious_content += "==================================================\n"
-glorious_content += "Response: #{JSON.pretty_generate(response)}\n"
-glorious_content += "==================================================\n"
-xamps =  Response.new(
-  success,
-  (success ? "Transaction approved" : response["description"]),
-  response,
-  :test => response["test"] || test?,
-  :authorization => success ? response["id"] : response["description"],
-  :avs_result => { :code => avs_code },
-  :cvv_result => cvc_code,
-  :error_code => success ? nil : STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]
-)
-glorious_content += "==================================================\n"
-glorious_content += "Response Obj: #{response.inspect}\n"
-
-File.write("/vagrant/myapp/pocs/mondido/log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content)
-end
-
-        Response.new(
+        am_res = Response.new(
           success,
           (success ? "Transaction approved" : response["description"]),
           response,
@@ -494,6 +456,35 @@ end
           :cvv_result => cvc_code,
           :error_code => success ? nil : STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]
         )
+
+# My Debug Code [BEGIN]
+=begin
+glorious_content = "==================================================\n"
+if parameters
+  glorious_content += "Parameters: #{JSON.pretty_generate(parameters)}\n"
+  glorious_content += "==================================================\n"
+  a = Net::HTTP::Post.new('api.mondido.com')
+  a.set_form_data(parameters)
+  glorious_content += "Post Data: #{a.body}\n"
+  glorious_content += "==================================================\n"
+end
+glorious_content += "Headers: #{JSON.pretty_generate(headers(options))}\n"
+glorious_content += "==================================================\n"
+glorious_content += "Response: #{JSON.pretty_generate(response)}\n"
+if not success
+  #glorious_content += "==================================================\n"
+  #glorious_content += response["name"] + "\n\n"
+  #glorious_content += STANDARD_ERROR_CODE_TRANSLATOR[response["name"]] + "\n"
+  #glorious_content += Gateway::STANDARD_ERROR_CODE[:card_declined] + "\n"
+  #glorious_content += (Gateway::STANDARD_ERROR_CODE[:card_declined] == STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]).to_s + "\n"
+end
+glorious_content += "==================================================\n"
+glorious_content += "Response Obj: #{am_res.inspect}\n"
+File.write("/vagrant/myapp/pocs/mondido/log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content)
+=end
+# Debug Code [END]
+
+          return am_res
       end
 
       def api_request(method, uri, parameters = nil, options = {})
@@ -570,8 +561,8 @@ end
       end
 
       def same_public_key?(pkr, pka)
-#File.write("/vagrant/myapp/pocs/mondido/pkr-#{Base64.encode64(Time.now.to_s).strip}.txt", pkr.to_pem)
-#File.write("/vagrant/myapp/pocs/mondido/pka-#{Base64.encode64(Time.now.to_s).strip}.txt", pka.to_pem)
+#File.write("pk1-#{Base64.encode64(Time.now.to_s).strip}.txt", pkr.to_pem)
+#File.write("pk2-#{Base64.encode64(Time.now.to_s).strip}.txt", pka.to_pem)
         # First check if the public keys use the same crypto...
         return false unless pkr.class == pka.class
         # ...and then - that they have the same contents
@@ -584,8 +575,8 @@ end
         if parameters.key?(:hash)
           return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) == parameters[:hash]
         else
-#File.write("/vagrant/myapp/pocs/mondido/cert1-#{Base64.encode64(Time.now.to_s).strip}-#{Base64.encode64(Time.now.to_s).strip}.txt", ref_cert.to_pem)
-#File.write("/vagrant/myapp/pocs/mondido/cert2-#{Base64.encode64(Time.now.to_s).strip}.txt", parameters[:cert].to_pem)
+#File.write("cert1-#{Base64.encode64(Time.now.to_s).strip}-#{Base64.encode64(Time.now.to_s).strip}.txt", ref_cert.to_pem)
+#File.write("cert2-#{Base64.encode64(Time.now.to_s).strip}.txt", parameters[:cert].to_pem)
           return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_pem) ==  \
                       OpenSSL::Digest::SHA256.hexdigest(parameters[:cert].to_pem)
         end

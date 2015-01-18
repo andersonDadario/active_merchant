@@ -1,6 +1,12 @@
 require 'test_helper'
 
 class RemoteMondidoTest < Test::Unit::TestCase
+
+# Values hardened for remote tests that need to be obtained through proper setup:
+# - stored card (@stored_card)
+# - declined stored card (@declined_stored_card)
+# - existing customer_id (generate_customer_ref_or_id function)
+
   def setup
     start_params = fixtures(:mondido)
 
@@ -13,14 +19,21 @@ class RemoteMondidoTest < Test::Unit::TestCase
     start_params.delete :public_key
     @gateway = MondidoGateway.new(start_params)
 
+# Work Around until crypto works
+@gateway_encrypted = @gateway
+
     @amount = 1000 # $ 10.00
     @credit_card = credit_card('4111111111111111', { verification_value: '200' })
     @declined_card = credit_card('4111111111111111', { verification_value: '201' })
     @cvv_invalid_card = credit_card('4111111111111111', { verification_value: '202' })
     @expired_card = credit_card('4111111111111111', { verification_value: '203' })
+    @stored_card = "54b9c601689"
+    @declined_stored_card = "need to get one"
 
-    @stored_card = credit_card('', { brand: 'stored_card' })
-    @declined_stored_card = credit_card('', { brand: 'stored_card' })
+# Work Around until get declined stored card
+@declined_stored_card = @declined_card
+
+    @options = { test: true, customer_ref: generate_customer_ref_or_id(true) }
 
 
     # The @base_order_id is for test purposes
@@ -34,13 +47,24 @@ class RemoteMondidoTest < Test::Unit::TestCase
     @remote_mondido_test_methods = (RemoteMondidoTest.instance_methods - Object.methods)
     @number_of_test_methods = @remote_mondido_test_methods.count
     @base_order_id = (200000000 + (test_iteration * @number_of_test_methods))
-    @options = { test: true }
+  end
+
+  ## HELPERS
+  #
+
+  def generate_random_number
+    rnumber = (@base_order_id + @counter).to_s + Time.now.strftime("%s%L")
+    @counter += 1
+    return rnumber
+  end
+
+  def generate_customer_ref_or_id(existing_customer)
+      return "23922" if existing_customer
+      generate_random_number
   end
 
   def generate_order_id
-    order_id = (@base_order_id + @counter).to_s + Time.now.to_s
-    @counter += 1
-    return order_id
+    generate_random_number
   end
 
   def generate_recurring
@@ -71,31 +95,64 @@ class RemoteMondidoTest < Test::Unit::TestCase
     }.to_json
   end
 
-  def purchase_response(new_options, encryption, authorize, stored_card, failure)
+  def store_response(encryption, existing_customer, identifier, success)
+    gateway = encryption ? @gateway_encrypted : @gateway   
+    card = success ? @credit_card : @declined_card
+    store_options = {
+        :test => true,
+        :currency => 'sek',
+    }
+
+    if existing_customer and identifier
+      store_options[:"customer_#{identifier}"] = generate_customer_ref_or_id(existing_customer)
+    end
+
+    return gateway.store(card, store_options)
+  end
+
+  def store_successful(encryption, existing_customer, identifier)
+    response = store_response(encryption, existing_customer, identifier, true)
+    assert_success response
+    assert_equal "SEK", response.params["currency"]
+    assert_equal "active", response.params["status"]
+  end
+
+  def store_failure(encryption, existing_customer, identifier)
+    response = store_response(encryption, existing_customer, identifier, false)
+    assert_failure response
+    assert_equal "errors.payment.declined", response.params["name"]
+  end
+
+  def purchase_response(new_options, encryption, authorize, stored_card, success)
     gateway = encryption ? @gateway_encrypted : @gateway
     card = stored_card ? @stored_card : @credit_card
     declined_card = stored_card ? @declined_stored_card : @declined_card
 
     return (authorize ?
-      gateway.authorize(@amount, (failure ? declined_card : card), new_options)
+      gateway.authorize(@amount, (success ? card : declined_card), new_options)
         :
-      gateway.purchase(@amount, (failure ? declined_card : card), new_options)
+      gateway.purchase(@amount, (success ? card : declined_card), new_options)
     )
   end
 
   def purchase_successful(new_options, encryption, authorize, stored_card)
-    response = purchase_response(new_options, encryption, authorize, stored_card, false)
+    response = purchase_response(new_options, encryption, authorize, stored_card, true)
 
     assert_success response
     assert_equal new_options[:order_id], response.params["payment_ref"]
-    assert_equal "approved", response.params["status"]
+    assert_equal ( authorize ? "authorized" : "approved" ), response.params["status"]
+    assert_equal ( stored_card ? "stored_card" : "credit_card" ), response.params["transaction_type"]
   end
 
   def purchase_failure(new_options, encryption, authorize, stored_card)
-    response = purchase_response(new_options, encryption, authorize, stored_card, true)
+    response = purchase_response(new_options, encryption, authorize, stored_card, false)
 
     assert_failure response
     assert_equal "errors.payment.declined", response.params["name"]
+  end
+
+  def format_amount(amount)
+    amount.to_s[0..-3].to_i.round(1).to_s
   end
 
   # CAUTION: You may get lost in the weeds to understand how these tests are structured.
@@ -110,8 +167,8 @@ class RemoteMondidoTest < Test::Unit::TestCase
   # 6. Refund
   # 7. Void
   # 8. Verify
-  # 9. Store
-  # 10. Unstore
+  # 9. Store Card
+  # 10. Unstore Card
 
 
   ## 1. Scrubbing
@@ -291,7 +348,6 @@ ZwIDAQAB
     assert_failure response
     assert_equal "Security Problem: pinned public key doesn't match the server public key.", response.message
   end
-
 
   ## 3. Purchase
   #
@@ -655,7 +711,7 @@ ZwIDAQAB
   end
 
   def test_failed_purchase_stored_card_recurring_webhook(encryption=false, authorize=false, stored=true)
-    test_failed_purchase_credit_card_recurring_webhook
+    test_failed_purchase_credit_card_recurring_webhook(encryption, authorize, stored)
   end
 
   # Without Web Hooks
@@ -724,7 +780,7 @@ ZwIDAQAB
     test_failed_purchase_credit_card(encryption, authorize, stored)
   end
 
-=begin
+
   ## 4. Authorize
   #
 
@@ -1078,102 +1134,217 @@ ZwIDAQAB
     test_failed_purchase_credit_card(false, true, true)
   end
 
-  # ...
-
-  def test_successful_authorize_and_capture
-    auth = @gateway.authorize(@amount, @credit_card, @options)
-    assert_success auth
-
-    assert capture = @gateway.capture(nil, auth.authorization)
-    assert_success capture
-  end
-
-  def test_failed_authorize
-    response = @gateway.authorize(@amount, @declined_card, @options)
-    assert_failure response
-  end
-=end
-
   ## 5. Capture
   #
-=begin
-  def test_partial_capture
-    auth = @gateway.authorize(@amount, @credit_card, @options)
+
+  def test_successful_authorize_and_capture
+    auth = @gateway.authorize(@amount, @credit_card, @options.merge({
+        :order_id => generate_order_id
+    }))
     assert_success auth
 
-    assert capture = @gateway.capture(@amount-1, auth.authorization)
+    assert capture = @gateway.capture(@amount, auth.authorization)
     assert_success capture
+    assert_equal "authorized", auth.params["status"]
+    assert_equal format_amount(@amount), capture.params["amount"]
+  end
+
+  def test_partial_capture
+    auth = @gateway.authorize(@amount, @credit_card, @options.merge({
+        :order_id => generate_order_id
+    }))
+    assert_success auth
+
+    assert capture = @gateway.capture(@amount/2, auth.authorization)
+    assert_success capture
+    assert_equal format_amount(@amount/2), capture.params["amount"]
+    assert_equal "authorized", auth.params["status"]
   end
 
   def test_failed_capture
     response = @gateway.capture(nil, '')
     assert_failure response
+    assert_equal "errors.amount.invalid", response.params["name"]
   end
-=end
 
   ## 6. Refund
   #
-=begin
+
   def test_successful_refund
-    purchase = @gateway.purchase(@amount, @credit_card, @options)
+    purchase = @gateway.purchase(@amount, @credit_card, @options.merge({
+        :order_id => generate_order_id
+    }))
     assert_success purchase
 
-    assert refund = @gateway.refund(nil, purchase.authorization)
+    assert refund = @gateway.refund(@amount, purchase.authorization, reason: "Test")
     assert_success refund
+    assert_equal format_amount(@amount), purchase.params["amount"]
   end
 
   def test_partial_refund
-    purchase = @gateway.purchase(@amount, @credit_card, @options)
+    purchase = @gateway.purchase(@amount, @credit_card, @options.merge({
+        :order_id => generate_order_id
+    }))
     assert_success purchase
 
-    assert refund = @gateway.refund(@amount-1, purchase.authorization)
+    assert refund = @gateway.refund(@amount/2, purchase.authorization, reason: "Test")
+    assert_equal format_amount(@amount/2), refund.params["amount"]
     assert_success refund
   end
 
   def test_failed_refund
-    response = @gateway.refund(nil, '')
+    response = @gateway.refund(nil, '', reason: "Test")
     assert_failure response
+    assert_equal "errors.transaction.not_found", response.params["name"]
   end
-=end
 
   ## 7. Void
   #
-=begin
+
   def test_successful_void
-    auth = @gateway.authorize(@amount, @credit_card, @options)
+    auth = @gateway.authorize(@amount, @credit_card, @options.merge({
+        :order_id => generate_order_id
+    }))
     assert_success auth
 
-    assert void = @gateway.void(auth.authorization)
+    assert void = @gateway.void(auth.authorization, reason: 'Test')
+    assert_equal format_amount(@amount), auth.params["amount"]
     assert_success void
   end
 
   def test_failed_void
-    response = @gateway.void('')
+    response = @gateway.void('', reason: 'Test')
     assert_failure response
+    assert_equal "errors.transaction.not_found", response.params["name"]
   end
-=end
 
   ## 8. Verify
   #
-=begin
-    def test_successful_verify
-    response = @gateway.verify(@credit_card, @options)
+
+  def test_successful_verify
+    response = @gateway.verify(@credit_card, @options.merge({
+        :order_id => generate_order_id
+    }))
     assert_success response
-    assert_match %r{REPLACE WITH SUCCESS MESSAGE}, response.message
   end
 
   def test_failed_verify
-    response = @gateway.verify(@declined_card, @options)
+    response = @gateway.verify(@declined_card, @options.merge({
+        :order_id => generate_order_id
+    }))
     assert_failure response
-    assert_match %r{REPLACE WITH FAILED PURCHASE MESSAGE}, response.message
-    assert_equal Gateway::STANDARD_ERROR_CODE[:card_declined], response.error_code
+    assert_equal "errors.payment.declined", response.params["name"]
   end
-=end
 
-  ## 9. Store
+
+
+  ## 9. Store Card
   #
 
-  ## 10. Unstore
+  # With Encryption
+    # Without customer_ref and customer_id
+    def test_encryption_successful_store
+      test_successful_store(true)
+    end
+
+    def test_encryption_failed_store
+      test_failed_store(true)
+    end 
+
+    # With Existing Customer
+      # With customer_ref
+      def test_successful_store_encryption_existing_customer_customer_ref
+        test_successful_store_existing_customer_customer_ref(true)
+      end
+
+      def test_failed_store_encryption_existing_customer_customer_ref
+        test_failed_store_existing_customer_customer_ref(true)
+      end
+
+      # With customer_id
+      def test_successful_store_encryption_existing_customer_customer_id
+        test_successful_store_existing_customer_customer_id(true)
+      end
+
+      def test_failed_store_encryption_existing_customer_customer_id
+        test_failed_store_existing_customer_customer_id(true)
+      end
+    # With Non Existing Customer
+      # With customer_ref
+      def test_successful_store_encryption_non_existing_customer_customer_ref
+        test_successful_store_non_existing_customer_customer_ref(true)
+      end
+
+      def test_failed_store_encryption_non_existing_customer_customer_ref
+        test_failed_store_non_existing_customer_customer_ref(true)
+      end
+
+      # With customer_id
+      def test_failed_store_encryption_non_existing_customer_customer_id
+        test_failed_store_non_existing_customer_customer_id(true)
+      end
+
+  # Without Encryption
+    # Without customer_ref and customer_id
+    def test_successful_store(encryption=false)
+      store_successful(encryption, nil, nil)
+    end
+
+    def test_failed_store(encryption=false)
+      store_failure(encryption, nil, nil)
+    end 
+
+    # With Existing Customer
+      # With customer_ref
+      def test_successful_store_existing_customer_customer_ref(encryption=false)
+        store_successful(encryption, true, 'ref')
+      end
+
+      def test_failed_store_existing_customer_customer_ref(encryption=false)
+        store_failure(encryption, true, 'ref')
+      end 
+      # With customer_id
+      def test_successful_store_existing_customer_customer_id(encryption=false)
+        store_successful(encryption, true, 'id')
+      end
+
+      def test_failed_store_existing_customer_customer_id(encryption=false)
+        store_failure(encryption, true, 'id')
+      end
+
+    # With Non Existing Customer
+      # With customer_ref
+      def test_successful_store_non_existing_customer_customer_ref(encryption=false)
+        store_successful(encryption, false, 'ref')
+      end
+
+      def test_failed_store_non_existing_customer_customer_ref(encryption=false)
+        store_failure(encryption, false, 'ref')
+      end
+
+      # With customer_id
+      def test_failed_store_non_existing_customer_customer_id(encryption=false)
+        store_failure(encryption, false, 'id')
+      end
+
+  ## 10. Unstore Card
   #
+
+  def test_successful_unstore
+    store = @gateway.store(@credit_card, {
+      test: true,
+      currency: 'sek'
+    })
+    assert_success store
+
+    unstore = @gateway.unstore(store.params["id"])
+    assert_success unstore
+  end
+
+  def test_failed_unstore
+    response = @gateway.unstore('')
+    assert_failure response
+    # 500 Error
+  end
 
 end
