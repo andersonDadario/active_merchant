@@ -211,7 +211,7 @@ module ActiveMerchant #:nodoc:
         #   If it doesn't exists an error will occur.
         post.merge!( :customer_id => options[:customer_id] ) if options[:customer_id]
 
-        add_encryption(post)
+        add_encryption(post, options)
         add_credit_card(post, payment)
         commit(:post, 'stored_cards', post)
       end
@@ -264,13 +264,6 @@ module ActiveMerchant #:nodoc:
         ## There are 3 different addresses you can use.
         ## There are :billing_address, :shipping_address, or you can just pass in
         ## :address and it will be used for both.
-
-        ## Options Specific for Mondido Gateway - documentation below
-        #  :process
-        #  :metadata
-        #  :plan_id
-        #  :customer_ref
-        #  :webhook
 
         requires!(options, :order_id)
         options[:order_id] = options[:order_id].to_s
@@ -361,7 +354,7 @@ module ActiveMerchant #:nodoc:
         #   (card_number, card_cvv, card_holder, card_expiry) in this case.
         post.merge!( :process => options[:process] ) if options[:process]
 
-        add_encryption(post)
+        add_encryption(post, options)
         add_credit_card(post, payment)
         commit(:post, 'transactions', post)
       end
@@ -404,12 +397,12 @@ module ActiveMerchant #:nodoc:
         end
       end
 
-      def add_encryption(post)
+      def add_encryption(post, options)
           # encrypted (string)
           #   A comma separated string for the params that you send encrypted.
           #   Ex. "card_number,card_cvv"
           if @public_key
-            post[:encrypted] = 'card_holder,card_number,card_cvv,card_expiry,card_type,' + \
+            post[:encrypted] = options[:encrypted] || 'card_holder,card_number,card_cvv,card_expiry,card_type,' + \
               'hash,amount,payment_ref,customer_ref,customer_id,plan_id,currency,webhook,metadata,test'
           end
       end
@@ -424,14 +417,6 @@ module ActiveMerchant #:nodoc:
       end  
 
       def commit(method, uri, parameters = nil, options = {})
-# DEBUG CODE
-# Query String
-#query_string = ""
-#if parameters and parameters.key?(:extend)
-#  query_string = "?extend=#{parameters[:extend]}"
-#end
-
-
         # RSA Public Key Encryption
         if @public_key and parameters.is_a? Hash and parameters.key?(:encrypted)
           all_params = parameters[:encrypted].split(",")
@@ -469,12 +454,12 @@ module ActiveMerchant #:nodoc:
         # So we use the standard code 'E'.
         # 'E' => AVS data is invalid or AVS is not allowed for this card type.
         # For more codes, please check the AVSResult class
-        avs_code = 'E'
+        avs_code = success ? 'E' : nil
 
         # By default, we understand that the CVV matched (code "M")
         # But we find the error 124 or 125, we report the
         # related CVC Code to Active Merchant gem
-        cvc_code = "M"
+        cvc_code = success ? "M" : nil
         if not success and ["errors.card_cvv.invalid","errors.card_cvv.missing"].include? response["name"]
           cvc_code = CVC_CODE_TRANSLATOR[ response["name"] ]
         end
@@ -490,39 +475,7 @@ module ActiveMerchant #:nodoc:
           :error_code => success ? nil : STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]
         )
 
-
-# My Debug Code [BEGIN]
-=begin
-glorious_content = "==================================================\n"
-uri = URI.parse(self.live_url + uri + query_string)
-glorious_content += "Method: #{method}\n"
-glorious_content += "Request URI: #{uri.request_uri}\n"
-glorious_content += "==================================================\n"
-if parameters
-  glorious_content += "Parameters: #{JSON.pretty_generate(parameters)}\n"
-  glorious_content += "==================================================\n"
-  a = Net::HTTP::Post.new('api.mondido.com')
-  a.set_form_data(parameters)
-  glorious_content += "Post Data: #{a.body}\n"
-  glorious_content += "==================================================\n"
-end
-glorious_content += "Headers: #{JSON.pretty_generate(headers(options))}\n"
-glorious_content += "==================================================\n"
-glorious_content += "Response: #{JSON.pretty_generate(response)}\n"
-if not success
-  #glorious_content += "==================================================\n"
-  #glorious_content += response["name"] + "\n\n"
-  #glorious_content += STANDARD_ERROR_CODE_TRANSLATOR[response["name"]] + "\n"
-  #glorious_content += Gateway::STANDARD_ERROR_CODE[:card_declined] + "\n"
-  #glorious_content += (Gateway::STANDARD_ERROR_CODE[:card_declined] == STANDARD_ERROR_CODE_TRANSLATOR[response["name"]]).to_s + "\n"
-end
-glorious_content += "==================================================\n"
-glorious_content += "Response Obj: #{am_res.inspect}\n"
-File.write("../log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content)
-=end
-# Debug Code [END]
-
-          return am_res
+        return am_res
       end
 
       def api_request(method, uri, parameters = nil, options = {})
@@ -569,10 +522,6 @@ File.write("../log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content
         end
 
         # Request Object
-# For Debug (disable gzip)
-#request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri, {'Accept-Encoding' => 'identity'})"
-#http.set_debug_output($stdout)
-
         request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri)"
 
         # Post Data
@@ -613,8 +562,6 @@ File.write("../log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content
       end
 
       def same_public_key?(pkr, pka)
-#File.write("pk1-#{Base64.encode64(Time.now.to_s).strip}.txt", pkr.to_pem)
-#File.write("pk2-#{Base64.encode64(Time.now.to_s).strip}.txt", pka.to_pem)
         # First check if the public keys use the same crypto...
         return false unless pkr.class == pka.class
         # ...and then - that they have the same contents
@@ -627,8 +574,6 @@ File.write("../log-#{Base64.encode64(Time.now.to_s).strip}.js", glorious_content
         if parameters.key?(:hash)
           return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_der) == parameters[:hash]
         else
-#File.write("cert1-#{Base64.encode64(Time.now.to_s).strip}-#{Base64.encode64(Time.now.to_s).strip}.txt", ref_cert.to_pem)
-#File.write("cert2-#{Base64.encode64(Time.now.to_s).strip}.txt", parameters[:cert].to_pem)
           return OpenSSL::Digest::SHA256.hexdigest(ref_cert.to_pem) ==  \
                       OpenSSL::Digest::SHA256.hexdigest(parameters[:cert].to_pem)
         end

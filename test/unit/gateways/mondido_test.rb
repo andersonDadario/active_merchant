@@ -1,24 +1,110 @@
 require 'test_helper'
+require 'openssl'
 
 class MondidoTest < Test::Unit::TestCase
   def setup
-    @gateway = MondidoGateway.new(
+    @gateway_params = {
       merchant_id: "123",
-      api_token: "test",
-      hash_secret: "test"
-    )
+      api_token: "api_token",
+      hash_secret: "hash_secret",
+      public_key: "-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvA1nsXtml1pHcr9vtHvv
+h9AS8MGYu2QAnrbPx2qd1iMyCOg3vZ/W+AH3LCsHILBJtBZrR9J+wWhRRdlsr8V8
+6Q+n+cZt1lLdUknzZxOgY9XagwnyNvn7WQ5hcDrXlP1xEPslZE48zPGm8HdDPCiS
+B0IJSLrsrWaiDCnQwH6Fk8k819xoEMxU+6W65MD6XHgXSJLmBVUTW34dcpAnbize
+VVe3+YO2OkRaKVfx+wSKu6PaSjhdUyU1Asau7opnpkr0TdPl/+C+hOw2eW1iYqYO
+4gM5M3G5Fdd/GHoaWVLCKOTuAbRVVRNwLHVQLJ2XlsejQQJBzHj91oOtoQd3o5no
+KQIDAQAB
+-----END PUBLIC KEY-----
+    ",
+    }
 
-    @credit_card = credit_card
-    @amount = 100
+    # Get values to pin
+    http = Net::HTTP.new('api.mondido.com', '443')
+    http.use_ssl = true
+    http.verify_mode = OpenSSL::SSL::VERIFY_PEER
+    http.verify_callback = lambda do | preverify_ok, cert_store |
+      return false unless preverify_ok
+      end_cert = cert_store.chain[0]
+      return true unless end_cert.to_der == cert_store.current_cert.to_der
+
+      # Pin
+      @gateway_params[:certificate_hash_for_pinning] = OpenSSL::Digest::SHA256.hexdigest(end_cert.to_der)
+      @gateway_params[:certificate_for_pinning] = end_cert.to_pem
+      @gateway_params[:public_key_for_pinning] = end_cert.public_key.to_pem
+
+      true
+    end
+
+    # With RSA crypto
+    @gateway_encrypted = MondidoGateway.new(@gateway_params)
+
+    # Without RSA crypto
+    @gateway_params.delete(:public_key)
+    @gateway = MondidoGateway.new(@gateway_params)
+
+    @credit_card = credit_card('4111111111111111', { verification_value: '200' })
+    @amount = 1000
 
     @options = {
       order_id: '2000019661421604843208',
       test: true
     }
+
+    @store_options = {
+      currency: 'sek',
+      test: true
+    }
+  end
+
+  def format_amount(amount)
+    amount.to_s[0..-3].to_i.round(1).to_s
   end
 
   def parse(body)
     JSON.parse(body)
+  end
+
+  def test_successful_certificate_hash_pinning
+    gp = @gateway_params
+    gp.delete(:certificate_for_pinning)
+    gp.delete(:public_key_for_pinning)
+    g = MondidoGateway.new(gp)
+    response = g.purchase(@amount, @credit_card, @options)
+    assert_not_match(/^Security Problem: pinned certificate doesn't match the server certificate./, response.message)
+  end
+
+  def test_successful_certificate_pinning
+    gp = @gateway_params
+    gp.delete(:certificate_hash_for_pinning)
+    gp.delete(:public_key_for_pinning)
+    g = MondidoGateway.new(gp)
+    response = g.purchase(@amount, @credit_card, @options)
+    assert_not_match(/^Security Problem: pinned certificate doesn't match the server certificate./, response.message)
+  end
+
+  def test_successful_public_key_pinning
+    gp = @gateway_params
+    gp.delete(:certificate_hash_for_pinning)
+    gp.delete(:certificate_for_pinning)
+    g = MondidoGateway.new(gp)
+    response = g.purchase(@amount, @credit_card, @options)
+    assert_not_match(/^Security Problem: pinned public key doesn't match the server public key./, response.message)
+  end
+
+  def test_successful_encryption
+    keypair = OpenSSL::PKey::RSA.generate(2048)
+
+    gp = @gateway_params
+    gp[:public_key] = keypair.public_key.to_pem
+
+    g = MondidoGateway.new(gp)
+    g.expects(:api_request).with {|method, uri, parameters, options|
+      decrypted = Base64.decode64(keypair.private_decrypt(Base64.decode64(parameters[:card_number])))
+      assert_equal @credit_card.number, decrypted
+    }.returns(parse(successful_purchase_response))
+
+    g.purchase(@amount, @credit_card, @options)
   end
 
   def test_successful_purchase
@@ -30,6 +116,8 @@ class MondidoTest < Test::Unit::TestCase
     assert_success response
 
     assert_equal @options[:order_id], response.params["payment_ref"]
+    assert_equal format_amount(@amount), response.params["amount"]
+    assert_equal "approved", response.params["status"]
     assert response.test?
   end
 
@@ -42,36 +130,206 @@ class MondidoTest < Test::Unit::TestCase
   end
 
   def test_successful_authorize
+    @gateway.expects(:api_request).returns(parse(successful_authorize_response))
+    @gateway.expects(:add_credit_card)
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_instance_of Response, response
+    assert_success response
+
+    assert_equal @options[:order_id], response.params["payment_ref"]
+    assert_equal format_amount(@amount), response.params["amount"]
+    assert_equal "authorized", response.params["status"]
+    assert response.test?
   end
 
   def test_failed_authorize
+    @gateway.expects(:api_request).returns(parse(failed_purchase_response))
+
+    response = @gateway.authorize(@amount, @credit_card, @options)
+    assert_failure response
+    assert_equal Gateway::STANDARD_ERROR_CODE[:card_declined], response.error_code
   end
 
   def test_successful_capture
+    @gateway.expects(:api_request).returns(parse(successful_authorize_response))
+
+    auth = @gateway.authorize(@amount, @credit_card, @options)
+    assert_success auth
+    assert auth.test?
+    assert_equal @options[:order_id], auth.params["payment_ref"]
+    assert_equal "authorized", auth.params["status"]
+
+    @gateway.expects(:api_request).returns(parse(successful_capture_response))
+    capture = @gateway.capture(@amount, auth.authorization)
+    assert_equal "approved", capture.params["status"]
+    assert_equal format_amount(@amount), capture.params["amount"]
+    assert_success capture
+    assert capture.test?
+  end
+
+  def test_successful_partial_capture
+    @gateway.expects(:api_request).returns(parse(successful_authorize_response))
+
+    auth = @gateway.authorize(@amount, @credit_card, @options)
+    assert_success auth
+    assert auth.test?
+    assert_equal @options[:order_id], auth.params["payment_ref"]
+    assert_equal "authorized", auth.params["status"]
+
+    @gateway.expects(:api_request).returns(parse(successful_partial_capture_response))
+    capture = @gateway.capture(@amount/2, auth.authorization)
+    assert_equal format_amount(@amount/2), capture.params["amount"]
+    assert_equal "approved", capture.params["status"]
+    assert_success capture
+    assert capture.test?
   end
 
   def test_failed_capture
+    @gateway.expects(:api_request).returns(parse(failed_capture_response))
+    capture = @gateway.capture(nil, '')
+    assert_failure capture
+    assert capture.test?
   end
 
   def test_successful_refund
+    @gateway.expects(:api_request).returns(parse(successful_purchase_response))
+
+    purchase = @gateway.purchase(@amount, @credit_card, @options)
+    assert_success purchase
+    assert purchase.test?
+    assert_equal @options[:order_id], purchase.params["payment_ref"]
+    assert_equal "approved", purchase.params["status"]
+
+    @gateway.expects(:api_request).returns(parse(successful_refund_response))
+    refund = @gateway.refund(@amount, purchase.authorization, @options.merge({
+      reason: "Test"
+    }))
+    assert_equal format_amount(@amount), refund.params["amount"]
+    assert_success refund
+    assert refund.test?
+  end
+
+  def test_successful_partial_refund
+    @gateway.expects(:api_request).returns(parse(successful_purchase_response))
+
+    purchase = @gateway.purchase(@amount, @credit_card, @options)
+    assert_success purchase
+    assert purchase.test?
+    assert_equal @options[:order_id], purchase.params["payment_ref"]
+    assert_equal "approved", purchase.params["status"]
+
+    @gateway.expects(:api_request).returns(parse(successful_partial_refund_response))
+    refund = @gateway.refund(@amount/2, purchase.authorization, @options.merge({
+      reason: "Test"
+    }))
+    assert_equal format_amount(@amount/2), refund.params["amount"]
+    assert_success refund
+    assert refund.test?
   end
 
   def test_failed_refund
+    @gateway.expects(:api_request).returns(parse(failed_refund_response))
+    refund = @gateway.refund(nil, '', @options.merge({
+      reason: "Test"
+    }))
+    assert_failure refund
+    assert refund.test?
   end
 
   def test_successful_void
+    @gateway.expects(:api_request).returns(parse(successful_authorize_response))
+    auth = @gateway.authorize(@amount, @credit_card, @options)
+    assert_success auth
+
+    @gateway.expects(:api_request).returns(parse(successful_void_response))
+    assert void = @gateway.void(auth.authorization, @options.merge({
+      reason: 'Test'
+    }))
+    assert_equal format_amount(@amount), auth.params["amount"]
+    assert_success void
   end
 
   def test_failed_void
+    @gateway.expects(:api_request).returns(parse(failed_void_response))
+    response = @gateway.void('', reason: 'Test')
+    assert_failure response
+    assert_equal "errors.transaction.not_found", response.params["name"]
   end
 
   def test_successful_verify
+    @gateway.expects(:api_request).twice.returns(parse(successful_verify_response), parse(successful_void_response))
+    response = @gateway.verify(@credit_card, @options)
+    assert_success response
   end
 
   def test_successful_verify_with_failed_void
+    @gateway.expects(:api_request).twice.returns(parse(successful_verify_response), parse(failed_void_response))
+    response = @gateway.verify(@credit_card, @options)
+    assert_success response
   end
 
   def test_failed_verify
+    @gateway.expects(:api_request).returns(parse(failed_verify_response))
+    response = @gateway.verify(@credit_card, @options)
+    assert_failure response
+    assert_equal "errors.payment.declined", response.params["name"]
+  end
+
+  def test_successful_store
+    @gateway.expects(:api_request).returns(parse(successful_store_response))
+    @gateway.expects(:add_credit_card)
+
+    response = @gateway.store(@credit_card, @store_options)
+    assert_instance_of Response, response
+    assert_success response
+
+    assert_equal "active", response.params["status"]
+    assert_equal @credit_card.number[0..5], response.params["card_number"][0..5]
+    assert_equal @credit_card.number[-4,4], response.params["card_number"][-4,4]
+    assert response.test?
+  end
+
+  def test_failed_store
+    @gateway.expects(:api_request).returns(parse(failed_store_response))
+    @gateway.expects(:add_credit_card)
+
+    response = @gateway.store(@credit_card, @store_options)
+    assert_failure response
+  end
+
+  def test_successful_unstore
+    @gateway.expects(:api_request).returns(parse(successful_unstore_response))
+
+    response = @gateway.unstore(15192)
+    assert_instance_of Response, response
+    assert_success response
+    assert response.test?
+  end
+
+  def test_failed_unstore
+    @gateway.expects(:api_request).returns(parse(failed_unstore_response))
+
+    response = @gateway.unstore('')
+    assert_failure response
+  end
+
+  def test_successful_extendability
+    @gateway.expects(:api_request).returns(
+      parse(successful_extendability_purchase_response)
+    )
+
+    purchase = @gateway.purchase(@amount, @credit_card, @options.merge({
+        :extend => "stored_card"
+    }))
+    assert_success purchase
+    assert_equal purchase.params["merchant_id"], purchase.params["stored_card"]["merchant_id"]
+  end
+
+  def test_gateway_without_credentials
+    assert_raises ArgumentError do
+      MondidoGateway.new
+    end
   end
 
   def test_scrub
@@ -216,6 +474,84 @@ class MondidoTest < Test::Unit::TestCase
     RESPONSE
   end
 
+  def successful_purchase_encrypted_response
+    <<-RESPONSE
+    {
+      "id": 27931,
+      "created_at": "2015-01-19T11:18:20Z",
+      "merchant_id": 145,
+      "amount": "10.0",
+      "vat_amount": null,
+      "payment_ref": "2000021461421666299242",
+      "ref": null,
+      "card_holder": "Longbob Longsen",
+      "card_number": "411111******1111",
+      "test": true,
+      "metadata": {
+        "products": [
+          {
+            "id": "1",
+            "name": "Nice Shoe",
+            "price": "100.00",
+            "qty": "1",
+            "url": "http://mondido.com/product/1"
+          }
+        ],
+        "user": {
+          "email": "user@email.com"
+        }
+      },
+      "currency": "usd",
+      "status": "approved",
+      "card_type": "VISA",
+      "transaction_type": "credit_card",
+      "template_id": null,
+      "error": null,
+      "cost": {
+        "percentual_fee": "0.025",
+        "fixed_fee": "0.025",
+        "percentual_exchange_fee": "0.035",
+        "total": "0.625"
+      },
+      "success_url": null,
+      "error_url": null,
+      "items": [
+
+      ],
+      "authorize": false,
+      "href": "https://pay.mondido.com/v1/form/AEmfNMmDyysB0o3RfsAl8Q",
+      "stored_card": {
+        "id": 15227
+      },
+      "customer": {
+        "id": 24138
+      },
+      "subscription": {
+        "id": 461
+      },
+      "payment_details": {
+        "id": 14573
+      },
+      "refunds": [
+
+      ],
+      "webhooks": [
+        {
+          "id": 59949,
+          "type": "Email",
+          "response": null,
+          "http_method": null,
+          "email": "user@hook.com",
+          "url": null,
+          "trigger": "payment_success",
+          "data_format": null,
+          "created_at": "2015-01-19T11:18:20Z"
+        }
+      ]
+    }
+    RESPONSE
+  end
+
   def failed_purchase_response
     <<-RESPONSE
     {
@@ -234,7 +570,7 @@ class MondidoTest < Test::Unit::TestCase
       "merchant_id": 145,
       "amount": "10.0",
       "vat_amount": null,
-      "payment_ref": "2000046211421599952357",
+      "payment_ref": "2000019661421604843208",
       "ref": null,
       "card_holder": "Longbob Longsen",
       "card_number": "411111******1111",
@@ -295,9 +631,9 @@ class MondidoTest < Test::Unit::TestCase
       "id": 27785,
       "created_at": "2015-01-18T16:51:48Z",
       "merchant_id": 145,
-      "amount": "5.0",
+      "amount": "10.0",
       "vat_amount": null,
-      "payment_ref": "2000046211421599907148",
+      "payment_ref": "2000019661421604843208",
       "ref": null,
       "card_holder": "Longbob Longsen",
       "card_number": "411111******1111",
@@ -340,12 +676,145 @@ class MondidoTest < Test::Unit::TestCase
     RESPONSE
   end
 
+  def successful_partial_capture_response
+    <<-RESPONSE
+    {
+      "id": 27922,
+      "created_at": "2015-01-19T10:53:26Z",
+      "merchant_id": 145,
+      "amount": "5.0",
+      "vat_amount": null,
+      "payment_ref": "2000019661421604843208",
+      "ref": null,
+      "card_holder": "Longbob Longsen",
+      "card_number": "411111******1111",
+      "test": true,
+      "metadata": null,
+      "currency": "usd",
+      "status": "approved",
+      "card_type": "VISA",
+      "transaction_type": "credit_card",
+      "template_id": null,
+      "error": null,
+      "cost": {
+        "percentual_fee": "0.025",
+        "fixed_fee": "0.025",
+        "percentual_exchange_fee": "0.035",
+        "total": "0.325"
+      },
+      "success_url": null,
+      "error_url": null,
+      "items": [
+
+      ],
+      "authorize": true,
+      "href": "https://pay.mondido.com/v1/form/CVtp6nB-1ufAIOwef2DM2A",
+      "stored_card": null,
+      "customer": null,
+      "subscription": null,
+      "payment_details": {
+        "id": 14565
+      },
+      "refunds": [
+
+      ],
+      "webhooks": [
+
+      ]
+    }
+    RESPONSE
+  end
+
   def failed_capture_response
     <<-RESPONSE
     {
       "name": "errors.amount.invalid",
       "code": 109,
       "description": "amount är fel. Ska vara t.ex. 10.00"
+    }
+    RESPONSE
+  end
+
+  def successful_refund_response
+    <<-RESPONSE
+    {
+      "id": 1096,
+      "created_at": "2015-01-18T16:53:02Z",
+      "amount": "10.0",
+      "reason": "Test",
+      "ref": null,
+      "transaction": {
+        "id": 27828,
+        "merchant_id": 145,
+        "amount": "10.0",
+        "currency": "usd",
+        "metadata_old": null,
+        "status": "approved",
+        "created_at": "2015-01-18T16:53:01Z",
+        "updated_at": "2015-01-18T16:53:01Z",
+        "code": null,
+        "message": null,
+        "payment_request": {
+          "hash": "3c8162db632b77a76ea8e4d6848f23ca",
+          "test": "true",
+          "amount": "10.00",
+          "extend": "transaction",
+          "card_cvv": "200",
+          "currency": "usd",
+          "card_type": "VISA",
+          "raw_amount": "10.00",
+          "card_expiry": "0916",
+          "card_holder": "Longbob Longsen",
+          "card_number": "4111111111111111",
+          "payment_ref": "2000019661421604843208",
+          "customer_ref": "23922"
+        },
+        "test": true,
+        "payment_info": {
+        },
+        "payment_response": null,
+        "refund_response": null,
+        "refund_amount": null,
+        "template_id": null,
+        "order_id": null,
+        "card_number": "411111******1111",
+        "card_holder": "Longbob Longsen",
+        "card_type": "VISA",
+        "raw_amount": "10.00",
+        "error_message": null,
+        "success_url": null,
+        "error_url": null,
+        "stored_card_id": null,
+        "metadata_old2": null,
+        "error_code": null,
+        "error_name": null,
+        "supported_card_json": "{'percentual_fee':'0.025','fixed_fee':'0.025','percentual_exchange_fee':'0.035'}",
+        "subscription_id": null,
+        "customer_id": 23958,
+        "ref": null,
+        "transaction_type": "credit_card",
+        "payment_ref": "2000019661421604843208",
+        "provider_ref": "54bbe4ed692",
+        "metadata": null,
+        "processed": true,
+        "locked": false,
+        "currency_converted_amount": "81.02357",
+        "data": null,
+        "vat_amount": null,
+        "service_provider": "test_provider",
+        "authorize": false,
+        "authorization_id": 0,
+        "href_token": "B8vsDse4CeS7aogizvDZwA",
+        "mpi_ref": null,
+        "client_info": {
+          "raw_user_agent": "Ruby, Mondido ActiveMerchantBindings/1.45.0",
+          "browser": "Ruby,",
+          "version": "",
+          "platform": null,
+          "ip": "201.81.64.127",
+          "accept_language": null
+        }
+      }
     }
     RESPONSE
   end
@@ -380,7 +849,7 @@ class MondidoTest < Test::Unit::TestCase
           "card_expiry": "0916",
           "card_holder": "Longbob Longsen",
           "card_number": "4111111111111111",
-          "payment_ref": "2000046211421599910591",
+          "payment_ref": "2000019661421604843208",
           "customer_ref": "23922"
         },
         "test": true,
@@ -402,12 +871,12 @@ class MondidoTest < Test::Unit::TestCase
         "metadata_old2": null,
         "error_code": null,
         "error_name": null,
-        "supported_card_json": "{\"percentual_fee\":\"0.025\",\"fixed_fee\":\"0.025\",\"percentual_exchange_fee\":\"0.035\"}",
+        "supported_card_json": "{'percentual_fee':'0.025','fixed_fee':'0.025','percentual_exchange_fee':'0.035'}",
         "subscription_id": null,
         "customer_id": 23958,
         "ref": null,
         "transaction_type": "credit_card",
-        "payment_ref": "2000046211421599910591",
+        "payment_ref": "2000019661421604843208",
         "provider_ref": "54bbe4a7799",
         "metadata": null,
         "processed": true,
@@ -431,90 +900,6 @@ class MondidoTest < Test::Unit::TestCase
       }
     }
     RESPONSE
-  end
-
-  def successful_full_refund_response
-    <<-RESPONSE
-    {
-      "id": 1096,
-      "created_at": "2015-01-18T16:53:02Z",
-      "amount": "10.0",
-      "reason": "Test",
-      "ref": null,
-      "transaction": {
-        "id": 27828,
-        "merchant_id": 145,
-        "amount": "10.0",
-        "currency": "usd",
-        "metadata_old": null,
-        "status": "approved",
-        "created_at": "2015-01-18T16:53:01Z",
-        "updated_at": "2015-01-18T16:53:01Z",
-        "code": null,
-        "message": null,
-        "payment_request": {
-          "hash": "3c8162db632b77a76ea8e4d6848f23ca",
-          "test": "true",
-          "amount": "10.00",
-          "extend": "transaction",
-          "card_cvv": "200",
-          "currency": "usd",
-          "card_type": "VISA",
-          "raw_amount": "10.00",
-          "card_expiry": "0916",
-          "card_holder": "Longbob Longsen",
-          "card_number": "4111111111111111",
-          "payment_ref": "2000046211421599979462",
-          "customer_ref": "23922"
-        },
-        "test": true,
-        "payment_info": {
-        },
-        "payment_response": null,
-        "refund_response": null,
-        "refund_amount": null,
-        "template_id": null,
-        "order_id": null,
-        "card_number": "411111******1111",
-        "card_holder": "Longbob Longsen",
-        "card_type": "VISA",
-        "raw_amount": "10.00",
-        "error_message": null,
-        "success_url": null,
-        "error_url": null,
-        "stored_card_id": null,
-        "metadata_old2": null,
-        "error_code": null,
-        "error_name": null,
-        "supported_card_json": "{\"percentual_fee\":\"0.025\",\"fixed_fee\":\"0.025\",\"percentual_exchange_fee\":\"0.035\"}",
-        "subscription_id": null,
-        "customer_id": 23958,
-        "ref": null,
-        "transaction_type": "credit_card",
-        "payment_ref": "2000046211421599979462",
-        "provider_ref": "54bbe4ed692",
-        "metadata": null,
-        "processed": true,
-        "locked": false,
-        "currency_converted_amount": "81.02357",
-        "data": null,
-        "vat_amount": null,
-        "service_provider": "test_provider",
-        "authorize": false,
-        "authorization_id": 0,
-        "href_token": "B8vsDse4CeS7aogizvDZwA",
-        "mpi_ref": null,
-        "client_info": {
-          "raw_user_agent": "Ruby, Mondido ActiveMerchantBindings/1.45.0",
-          "browser": "Ruby,",
-          "version": "",
-          "platform": null,
-          "ip": "201.81.64.127",
-          "accept_language": null
-        }
-      }
-    }
-  RESPONSE
   end
 
   def failed_refund_response
@@ -558,7 +943,7 @@ class MondidoTest < Test::Unit::TestCase
           "card_expiry": "0916",
           "card_holder": "Longbob Longsen",
           "card_number": "4111111111111111",
-          "payment_ref": "2000046211421600067349",
+          "payment_ref": "2000019661421604843208",
           "customer_ref": "23922"
         },
         "test": true,
@@ -580,12 +965,12 @@ class MondidoTest < Test::Unit::TestCase
         "metadata_old2": null,
         "error_code": null,
         "error_name": null,
-        "supported_card_json": "{\"percentual_fee\":\"0.025\",\"fixed_fee\":\"0.025\",\"percentual_exchange_fee\":\"0.035\"}",
+        "supported_card_json": "{'percentual_fee':'0.025','fixed_fee':'0.025','percentual_exchange_fee':'0.035'}",
         "subscription_id": null,
         "customer_id": 23958,
         "ref": null,
         "transaction_type": "credit_card",
-        "payment_ref": "2000046211421600067349",
+        "payment_ref": "2000019661421604843208",
         "provider_ref": "54bbe544647",
         "metadata": null,
         "processed": true,
@@ -617,6 +1002,65 @@ class MondidoTest < Test::Unit::TestCase
       "name": "errors.transaction.not_found",
       "code": 128,
       "description": "Transaktionen hittas inte"
+    }
+    RESPONSE
+  end
+
+  def successful_verify_response
+    <<-RESPONSE
+    {
+      "id": 27958,
+      "created_at": "2015-01-19T13:47:20Z",
+      "merchant_id": 145,
+      "amount": "1.0",
+      "vat_amount": null,
+      "payment_ref": "2000021311421675238988",
+      "ref": null,
+      "card_holder": "Longbob Longsen",
+      "card_number": "411111******1111",
+      "test": true,
+      "metadata": null,
+      "currency": "usd",
+      "status": "authorized",
+      "card_type": "VISA",
+      "transaction_type": "credit_card",
+      "template_id": null,
+      "error": null,
+      "cost": {
+        "percentual_fee": "0.025",
+        "fixed_fee": "0.025",
+        "percentual_exchange_fee": "0.035",
+        "total": "0.085"
+      },
+      "success_url": null,
+      "error_url": null,
+      "items": [
+
+      ],
+      "authorize": true,
+      "href": "https://pay.mondido.com/v1/form/UJ1cSV2xlEYjwUy5-LOFOA",
+      "stored_card": null,
+      "customer": null,
+      "subscription": null,
+      "payment_details": {
+        "id": 14601
+      },
+      "refunds": [
+
+      ],
+      "webhooks": [
+
+      ]
+    }
+    RESPONSE
+  end
+
+  def failed_verify_response
+    <<-RESPONSE
+    {
+      "name": "errors.payment.declined",
+      "code": 129,
+      "description": "Betalningen nekades"
     }
     RESPONSE
   end
@@ -677,9 +1121,76 @@ class MondidoTest < Test::Unit::TestCase
     <<-RESPONSE
     {
       "name": "errors.unexpected",
-      "description": "Invalid response received from the Mondido API.\n  Please contact support@mondido.com if you continue to receive this message.\n  (The raw response returned by the API was #<Net::HTTPNotFound 404 Not Found readbody=true>)",
+      "description": "Invalid response received from the Mondido API. Please contact support@mondido.com if you continue to receive this message.  (The raw response returned by the API was #<Net::HTTPNotFound 404 Not Found readbody=true>)",
       "code": 133
     }
     RESPONSE
   end
+
+  def successful_extendability_purchase_response
+    <<-RESPONSE
+    {
+      "id": 27973,
+      "created_at": "2015-01-19T15:35:32Z",
+      "merchant_id": 145,
+      "amount": "10.0",
+      "vat_amount": null,
+      "payment_ref": "2000021161421681730898",
+      "ref": null,
+      "card_holder": "Longbob Longsen",
+      "card_number": "411111******1111",
+      "test": true,
+      "metadata": null,
+      "currency": "usd",
+      "status": "approved",
+      "card_type": "VISA",
+      "transaction_type": "stored_card",
+      "template_id": null,
+      "error": null,
+      "cost": {
+        "percentual_fee": "0.025",
+        "fixed_fee": "0.025",
+        "percentual_exchange_fee": "0.035",
+        "total": "0.625"
+      },
+      "success_url": null,
+      "error_url": null,
+      "items": [
+
+      ],
+      "authorize": false,
+      "href": "https://pay.mondido.com/v1/form/x6kYvx6Fl3xD2t58jp3VkQ",
+      "stored_card": {
+        "id": 14857,
+        "created_at": "2015-01-17T02:16:33Z",
+        "token": "54b9c601689",
+        "card_holder": "Longbob Longsen",
+        "card_number": "411111******1111",
+        "status": "active",
+        "currency": "USD",
+        "expires": "2016-09-30T23:59:59Z",
+        "ref": null,
+        "merchant_id": 145,
+        "test": true,
+        "customer": {
+          "id": 23922
+        }
+      },
+      "customer": {
+        "id": 23922
+      },
+      "subscription": null,
+      "payment_details": {
+        "id": 14618
+      },
+      "refunds": [
+
+      ],
+      "webhooks": [
+
+      ]
+    }
+    RESPONSE
+  end
+
 end

@@ -1238,7 +1238,6 @@ ZwIDAQAB
   end
 
 
-
   ## 9. Store Card
   #
 
@@ -1348,18 +1347,19 @@ ZwIDAQAB
   #
 
   def test_successful_extendability
-    purchase = @gateway.purchase(@amount, @credit_card, @options.merge({
+    purchase = @gateway.purchase(@amount, @stored_card, @options.merge({
         :order_id => generate_order_id,
-        :extend => "transaction"
+        :extend => "stored_card"
     }))
     assert_success purchase
 
     assert refund = @gateway.refund(@amount, purchase.authorization, {
       :reason => "Test"
     })
+
     assert_success refund
     assert_equal format_amount(@amount), purchase.params["amount"]
-    assert_equal "transaction", refund.params["transaction"]["payment_request"]["extend"]
+    assert_equal purchase.params["merchant_id"], purchase.params["stored_card"]["merchant_id"]
   end
 
 end
