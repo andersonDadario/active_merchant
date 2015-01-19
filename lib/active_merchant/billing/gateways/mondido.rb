@@ -168,7 +168,7 @@ module ActiveMerchant #:nodoc:
       def verify(credit_card, options={})
         # Test a payment authorizing a value of 1.00
         # Then void the transaction and refund the value
-        options[:reason] ||= "Active Merchant Test"
+        options[:reason] ||= "Active Merchant Verify"
 
         MultiResponse.run(:use_first_response) do |r|
           r.process { authorize(100, credit_card, options) }
@@ -181,15 +181,9 @@ module ActiveMerchant #:nodoc:
           # currency  string* required
           :currency => options[:currency] || self.default_currency,
 
-          # encrypted (string)
-          #   A comma separated string for the params that you send encrypted.
-          #   Ex. "card_number,card_cvv"
-          :encrypted => '',
-
           # test bool
           #   Must be true if you are using a test card number.
           :test => test?
-
         }
 
         # extend  string
