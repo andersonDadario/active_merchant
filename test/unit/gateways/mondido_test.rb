@@ -107,6 +107,46 @@ KQIDAQAB
     g.purchase(@amount, @credit_card, @options)
   end
 
+  def test_successful_custom_encryption_purchase
+    keypair = OpenSSL::PKey::RSA.generate(2048)
+
+    gp = @gateway_params
+    gp[:public_key] = keypair.public_key.to_pem
+
+    g = MondidoGateway.new(gp)
+    g.expects(:api_request).with {|method, uri, parameters, options|
+      decrypted = Base64.decode64(keypair.private_decrypt(Base64.decode64(parameters[:card_number])))
+
+      assert_equal 'card_number', parameters[:encrypted]
+      assert_equal @credit_card.verification_value, parameters[:card_cvv]
+      assert_equal @credit_card.number, decrypted
+    }.returns(parse(successful_purchase_response))
+
+    g.purchase(@amount, @credit_card, @options.merge({
+      :encrypted => 'card_number'
+    }))
+  end
+
+  def test_successful_custom_encryption_store_card
+    keypair = OpenSSL::PKey::RSA.generate(2048)
+
+    gp = @gateway_params
+    gp[:public_key] = keypair.public_key.to_pem
+
+    g = MondidoGateway.new(gp)
+    g.expects(:api_request).with {|method, uri, parameters, options|
+      decrypted = Base64.decode64(keypair.private_decrypt(Base64.decode64(parameters[:card_number])))
+
+      assert_equal 'card_number', parameters[:encrypted]
+      assert_equal @credit_card.verification_value, parameters[:card_cvv]
+      assert_equal @credit_card.number, decrypted
+    }.returns(parse(successful_purchase_response))
+
+    g.store(@credit_card, @store_options.merge({
+      :encrypted => 'card_number'
+    }))
+  end
+
   def test_successful_purchase
     @gateway.expects(:api_request).returns(parse(successful_purchase_response))
     @gateway.expects(:add_credit_card)

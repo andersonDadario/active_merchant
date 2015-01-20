@@ -120,13 +120,8 @@ module ActiveMerchant #:nodoc:
           #   The amount to refund. Ex. 5.00
           :amount => get_amount(money, options)
         }
-        # extend  string
-        #   Extentability
-        #   Many objects have child resources such as customer and stored card.
-        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
-        #   specifying to extend them in the url.
-        put.merge!( :extend => options[:extend].to_s ) if options[:extend]
 
+        add_support_params(put, options)
         commit(:put, "transactions/#{authorization}/capture", put)
       end
 
@@ -148,13 +143,8 @@ module ActiveMerchant #:nodoc:
           #   The reason for the refund. Ex. "Cancelled order"
           :reason => options[:reason]
         }
-        # extend  string
-        #   Extentability
-        #   Many objects have child resources such as customer and stored card.
-        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
-        #   specifying to extend them in the url.
-        post.merge!( :extend => options[:extend].to_s ) if options[:extend]
 
+        add_support_params(post, options)
         commit(:post, 'refunds', post)
       end
 
@@ -186,13 +176,6 @@ module ActiveMerchant #:nodoc:
           :test => test?
         }
 
-        # extend  string
-        #   Extentability
-        #   Many objects have child resources such as customer and stored card.
-        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
-        #   specifying to extend them in the url.
-        post.merge!( :extend => options[:extend].to_s ) if options[:extend]
-
         # customer_ref  string
         #   Merchant specific customer ID.
         #   If this customer exists the card will be added to that customer.
@@ -205,13 +188,16 @@ module ActiveMerchant #:nodoc:
         #   If it doesn't exists an error will occur.
         post.merge!( :customer_id => options[:customer_id] ) if options[:customer_id]
 
+        add_support_params(post, options)
         add_encryption(post, options)
         add_credit_card(post, payment)
         commit(:post, 'stored_cards', post)
       end
 
-      def unstore(id)
-        commit(:delete, "stored_cards/#{id}")
+      def unstore(id, options={})
+        params = {}
+        add_support_params(params, options)
+        commit(:delete, "stored_cards/#{id}", params)
       end
 
       def supports_scrubbing?
@@ -301,13 +287,6 @@ module ActiveMerchant #:nodoc:
         #   [ Not documented ]
         post.merge!( :authorize => options[:authorize] ) if options[:authorize]
 
-        # extend  string
-        #   Extentability
-        #   Many objects have child resources such as customer and stored card.
-        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
-        #   specifying to extend them in the url.
-        post.merge!( :extend => options[:extend].to_s ) if options[:extend]
-
         # Merchant custom Metadata (string)
         #   Metadata is custom schemaless information that you can choose to send in to Mondido.
         #   It can be information about the customer, the product or about campaigns or offers.
@@ -348,6 +327,7 @@ module ActiveMerchant #:nodoc:
         #   (card_number, card_cvv, card_holder, card_expiry) in this case.
         post.merge!( :process => options[:process] ) if options[:process]
 
+        add_support_params(post, options)
         add_encryption(post, options)
         add_credit_card(post, payment)
         commit(:post, 'transactions', post)
@@ -399,6 +379,36 @@ module ActiveMerchant #:nodoc:
             post[:encrypted] = options[:encrypted] || 'card_holder,card_number,card_cvv,card_expiry,card_type,' + \
               'hash,amount,payment_ref,customer_ref,customer_id,plan_id,currency,webhook,metadata,test'
           end
+      end
+
+      def add_support_params(post, options)
+        # extend  string
+        #   Extentability
+        #   Many objects have child resources such as customer and stored card.
+        #   To minimize the object graph being sent over REST calls you can choose to add full objects by
+        #   specifying to extend them in the url.
+        query_string_values = {}
+        query_string_values[:extend] = options[:extend].to_s if options[:extend]
+
+        # locale string
+        #   Language
+        #   The API supports responses in Swedish and English so if you specify locale=sv or locale=en either
+        #   as a parameter that you send in or int the query you will receive error messages in the desired language.
+        query_string_values[:locale] = options[:locale].to_s if options[:locale]
+
+        # start_id int
+        # limit    int
+        # offset   int
+        #   Partial data
+        #   While doing API calls you can use pagination to fetch parts of your data using limit, offset and start_id.
+        query_string_values[:start_id] = options[:start_id].to_s if options[:start_id]
+        query_string_values[:limit] = options[:limit].to_s if options[:limit]
+        query_string_values[:offset] = options[:offset].to_s if options[:offset]
+
+        if not query_string_values.empty?
+          post[:query_string_values] = query_string_values
+        end
+
       end
 
       def get_amount(money, options)
@@ -475,9 +485,10 @@ module ActiveMerchant #:nodoc:
       def api_request(method, uri, parameters = nil, options = {})
         # Query String
         query_string = ""
-        if parameters and parameters.key?(:extend)
-          query_string = "?extend=#{parameters[:extend]}"
-          parameters.delete(:extend)
+        if parameters.key?(:query_string_values)
+          query_string = "?" + URI.encode_www_form(parameters[:query_string_values])
+
+          parameters.delete(:query_string_values)
           if parameters.count == 0
             parameters = nil
           end
@@ -516,6 +527,8 @@ module ActiveMerchant #:nodoc:
         end
 
         # Request Object
+#request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri, {'Accept-Encoding' => 'identity'})"
+#http.set_debug_output($stdout)
         request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri)"
 
         # Post Data

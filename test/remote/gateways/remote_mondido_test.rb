@@ -167,7 +167,7 @@ class RemoteMondidoTest < Test::Unit::TestCase
   # 8. Verify
   # 9. Store Card
   # 10. Unstore Card
-  # 11. Extendability
+  # 11. Extendability, Locale
 
 
   ## 1. Scrubbing
@@ -1343,13 +1343,16 @@ ZwIDAQAB
     assert_failure response
   end
 
-  ## 11. Extendability
+  ## 11. Extendability, Locale
   #
 
   def test_successful_extendability
     purchase = @gateway.purchase(@amount, @stored_card, @options.merge({
         :order_id => generate_order_id,
-        :extend => "stored_card"
+        :extend => "stored_card",
+        :locale => "en",
+        :start_id => 0,
+        :limit => 9999999
     }))
     assert_success purchase
 
@@ -1360,6 +1363,22 @@ ZwIDAQAB
     assert_success refund
     assert_equal format_amount(@amount), purchase.params["amount"]
     assert_equal purchase.params["merchant_id"], purchase.params["stored_card"]["merchant_id"]
+  end
+
+  def test_successful_locale_en
+    response = @gateway.unstore('1', {
+      :locale => "en"
+    })
+    assert_failure response
+    assert_equal "Unauthorized", response.message
+  end
+
+  def test_successful_locale_se
+    response = @gateway.unstore('1', {
+      :locale => "se"
+    })
+    assert_failure response
+    assert_equal "Ej beh\xC3\xB6rig", response.message
   end
 
 end
