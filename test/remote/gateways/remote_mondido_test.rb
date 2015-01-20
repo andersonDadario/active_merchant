@@ -2,12 +2,6 @@ require 'test_helper'
 
 class RemoteMondidoTest < Test::Unit::TestCase
 
-# Values hardened for remote tests that need to be obtained through proper setup:
-# - stored card (@stored_card)
-# - declined stored card (@declined_stored_card)
-# - existing customer_id (generate_customer_ref_or_id function)
-# - plan id for recurring (generate_recurring)
-
   def setup
     start_params = fixtures(:mondido)
 
@@ -25,34 +19,103 @@ class RemoteMondidoTest < Test::Unit::TestCase
     @declined_card = credit_card('4111111111111111', { verification_value: '201' })
     @cvv_invalid_card = credit_card('4111111111111111', { verification_value: '202' })
     @expired_card = credit_card('4111111111111111', { verification_value: '203' })
-    @stored_card = "54b9c601689"
-    @declined_stored_card = "need to get one"
+    @stored_card = nil
+    @declined_stored_card = @declined_card
+    @customer_id = nil
+    @plan_id = nil
 
-# Work Around until get declined stored card
-@declined_stored_card = @declined_card
-
-    @options = { test: true}#, customer_ref: generate_customer_ref_or_id(true) }
+    @options = { test: true }
     @store_options = {
         :test => true,
         :currency => 'sek',
     }
 
+    # Get stored card
+    begin
+      cards = api_request(:get, "stored_cards")
+      cards.each do |card|
+        if card["status"] == "active"
+          @stored_card = card["token"]
+          break
+        end
+      end
 
-    # The @base_order_id is for test purposes
-    # As could not exist more than one transaction using the same payment_ref value,
-    # To prevent different methods from using the same order_id, I just increment the
-    # test_iteration value in 1 and it will serve as a factor to change the order_id in
-    # every test method. This way there will be no duplicates and all tests will respect
-    # some base number (200000000 in this case).
-    test_iteration = 15
+      unless @stored_card
+        card = api_request(@credit_card, @store_options)
+        @store_card = card["token"]
+      end
+    rescue
+      raise "[Setup] Unable to get or create Stored Card Token"
+    end
+
+    # Get customer id
+    begin
+      customers = api_request(:get, "customers")
+      @customer_id = customers[0]["id"] if not customers.empty?
+
+      unless @customer_id
+        customer = api_request(:post, "customers")
+        @customer_id = customer["id"]
+      end
+    rescue
+      raise "[Setup] Unable to get or create Customer ID"
+    end
+
+    # Get plan id
+    begin
+      plans = api_request(:get, "plans")
+      @plan_id = plans[0]["id"] if not plans.empty?
+
+      unless @plan_id
+        plan = api_request(:post, "plans", {
+          interval_unit: 'days',
+          interval: 30,
+          prices: {"eur" => "10","sek" => "100"}.to_json,
+          name: "Active Merchant Test"
+        })
+        @plan_id = plan["id"]
+      end
+    rescue
+      raise "[Setup] Unable to get or create Plan ID"
+    end
+
+    # The @base_order_id and @counter are for test purposes
+    # More precisely, the payment_ref value generation as
+    # could not exist more than one transaction using the same payment_ref value
     @counter = 1
-    @remote_mondido_test_methods = (RemoteMondidoTest.instance_methods - Object.methods)
-    @number_of_test_methods = @remote_mondido_test_methods.count
-    @base_order_id = (200000000 + (test_iteration * @number_of_test_methods))
+    @base_order_id = (200000000)
   end
 
   ## HELPERS
   #
+
+  def api_request(method, uri, parameters = nil, options = {})
+    raw_response = nil
+    uri = URI.parse(@gateway.live_url + uri)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = true
+    request = eval "Net::HTTP::#{method.capitalize}.new(uri.request_uri)"
+
+    # Post Data
+    request.set_form_data(parameters) if parameters
+
+    # Add Headers
+    auth = "#{fixtures(:mondido)[:merchant_id]}:#{fixtures(:mondido)[:api_token]}"
+    headers = {
+          "Authorization" => "Basic " + Base64.encode64(auth).strip,
+          "User-Agent" => "Mondido ActiveMerchantBindings/#{ActiveMerchant::VERSION}",
+          #"X-Mondido-Client-User-Agent" => user_agent, # defined in Gateway.rb
+          #"X-Mondido-Client-IP" => options[:ip] if options[:ip]
+    }
+    headers.keys.each do |header|
+      request.add_field(header, headers[header])
+    end
+
+    # Do request
+    raw_response = http.request(request)
+
+    JSON.parse(raw_response.body)
+  end
 
   def generate_random_number
     rnumber = (@base_order_id + @counter).to_s + Time.now.strftime("%s%L")
@@ -61,7 +124,7 @@ class RemoteMondidoTest < Test::Unit::TestCase
   end
 
   def generate_customer_ref_or_id(existing_customer)
-      return "23922" if existing_customer
+      return @customer_id if existing_customer
       generate_random_number
   end
 
@@ -70,7 +133,7 @@ class RemoteMondidoTest < Test::Unit::TestCase
   end
 
   def generate_recurring
-    100
+    @plan_id
   end
 
   def generate_webhook
